@@ -12,6 +12,7 @@ import (
 
 type AlertCurEvent struct {
 	Id                 int64             `json:"id" gorm:"primaryKey"`
+	Cate               string            `json:"cate"`
 	Cluster            string            `json:"cluster"`
 	GroupId            int64             `json:"group_id"`   // busi group id
 	GroupName          string            `json:"group_name"` // busi group name
@@ -38,14 +39,15 @@ type AlertCurEvent struct {
 	TargetNote         string            `json:"target_note"`
 	TriggerTime        int64             `json:"trigger_time"`
 	TriggerValue       string            `json:"trigger_value"`
-	Tags               string            `json:"-"`                          // for db
-	TagsJSON           []string          `json:"tags" gorm:"-"`              // for fe
-	TagsMap            map[string]string `json:"-" gorm:"-"`                 // for internal usage
-	IsRecovered        bool              `json:"is_recovered" gorm:"-"`      // for notify.py
-	NotifyUsersObj     []*User           `json:"notify_users_obj" gorm:"-"`  // for notify.py
-	LastEvalTime       int64             `json:"last_eval_time" gorm:"-"`    // for notify.py 上次计算的时间
-	LastSentTime       int64             `json:"last_sent_time" gorm:"-"`    // 上次发送时间
-	NotifyCurNumber    int               `json:"notify_cur_number" gorm:"-"` // notify: current number
+	Tags               string            `json:"-"`                         // for db
+	TagsJSON           []string          `json:"tags" gorm:"-"`             // for fe
+	TagsMap            map[string]string `json:"-" gorm:"-"`                // for internal usage
+	IsRecovered        bool              `json:"is_recovered" gorm:"-"`     // for notify.py
+	NotifyUsersObj     []*User           `json:"notify_users_obj" gorm:"-"` // for notify.py
+	LastEvalTime       int64             `json:"last_eval_time" gorm:"-"`   // for notify.py 上次计算的时间
+	LastSentTime       int64             `json:"last_sent_time" gorm:"-"`   // 上次发送时间
+	NotifyCurNumber    int               `json:"notify_cur_number"`         // notify: current number
+	FirstTriggerTime   int64             `json:"first_trigger_time"`        // 连续告警的首次告警时间
 }
 
 func (e *AlertCurEvent) TableName() string {
@@ -154,6 +156,7 @@ func (e *AlertCurEvent) ToHis() *AlertHisEvent {
 
 	return &AlertHisEvent{
 		IsRecovered:      isRecovered,
+		Cate:             e.Cate,
 		Cluster:          e.Cluster,
 		GroupId:          e.GroupId,
 		GroupName:        e.GroupName,
@@ -179,6 +182,8 @@ func (e *AlertCurEvent) ToHis() *AlertHisEvent {
 		Tags:             e.Tags,
 		RecoverTime:      recoverTime,
 		LastEvalTime:     e.LastEvalTime,
+		NotifyCurNumber:  e.NotifyCurNumber,
+		FirstTriggerTime: e.FirstTriggerTime,
 	}
 }
 
@@ -246,7 +251,7 @@ func (e *AlertCurEvent) FillNotifyGroups(cache map[int64]*UserGroup) error {
 	return nil
 }
 
-func AlertCurEventTotal(prod string, bgid, stime, etime int64, severity int, clusters []string, query string) (int64, error) {
+func AlertCurEventTotal(prod string, bgid, stime, etime int64, severity int, clusters, cates []string, query string) (int64, error) {
 	session := DB().Model(&AlertCurEvent{}).Where("trigger_time between ? and ? and rule_prod = ?", stime, etime, prod)
 
 	if bgid > 0 {
@@ -261,6 +266,10 @@ func AlertCurEventTotal(prod string, bgid, stime, etime int64, severity int, clu
 		session = session.Where("cluster in ?", clusters)
 	}
 
+	if len(cates) > 0 {
+		session = session.Where("cate in ?", cates)
+	}
+
 	if query != "" {
 		arr := strings.Fields(query)
 		for i := 0; i < len(arr); i++ {
@@ -272,7 +281,7 @@ func AlertCurEventTotal(prod string, bgid, stime, etime int64, severity int, clu
 	return Count(session)
 }
 
-func AlertCurEventGets(prod string, bgid, stime, etime int64, severity int, clusters []string, query string, limit, offset int) ([]AlertCurEvent, error) {
+func AlertCurEventGets(prod string, bgid, stime, etime int64, severity int, clusters, cates []string, query string, limit, offset int) ([]AlertCurEvent, error) {
 	session := DB().Where("trigger_time between ? and ? and rule_prod = ?", stime, etime, prod)
 
 	if bgid > 0 {
@@ -285,6 +294,10 @@ func AlertCurEventGets(prod string, bgid, stime, etime int64, severity int, clus
 
 	if len(clusters) > 0 {
 		session = session.Where("cluster in ?", clusters)
+	}
+
+	if len(cates) > 0 {
+		session = session.Where("cate in ?", cates)
 	}
 
 	if query != "" {

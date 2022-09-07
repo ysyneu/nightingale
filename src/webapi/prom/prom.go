@@ -11,14 +11,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/didi/nightingale/v5/src/models"
+	"github.com/didi/nightingale/v5/src/pkg/prom"
 	"github.com/didi/nightingale/v5/src/webapi/config"
+	"github.com/prometheus/client_golang/api"
 	"github.com/toolkits/pkg/logger"
 	"github.com/toolkits/pkg/net/httplib"
 )
 
 type ClusterType struct {
-	Opts      config.ClusterOptions
-	Transport *http.Transport
+	Opts       config.ClusterOptions
+	Transport  *http.Transport
+	PromClient prom.API
 }
 
 type ClustersType struct {
@@ -26,10 +30,44 @@ type ClustersType struct {
 	mutex *sync.RWMutex
 }
 
+type PromOption struct {
+	Url                 string
+	User                string
+	Pass                string
+	Headers             []string
+	Timeout             int64
+	DialTimeout         int64
+	MaxIdleConnsPerHost int
+}
+
 func (cs *ClustersType) Put(name string, cluster *ClusterType) {
 	cs.mutex.Lock()
+	defer cs.mutex.Unlock()
+
 	cs.datas[name] = cluster
-	cs.mutex.Unlock()
+
+	// 把配置信息写入DB一份，这样n9e-server就可以直接从DB读取了
+	po := PromOption{
+		Url:                 cluster.Opts.Prom,
+		User:                cluster.Opts.BasicAuthUser,
+		Pass:                cluster.Opts.BasicAuthPass,
+		Headers:             cluster.Opts.Headers,
+		Timeout:             cluster.Opts.Timeout,
+		DialTimeout:         cluster.Opts.DialTimeout,
+		MaxIdleConnsPerHost: cluster.Opts.MaxIdleConnsPerHost,
+	}
+
+	bs, err := json.Marshal(po)
+	if err != nil {
+		logger.Fatal("failed to marshal PromOption:", err)
+		return
+	}
+
+	key := "prom." + name + ".option"
+	err = models.ConfigsSet(key, string(bs))
+	if err != nil {
+		logger.Fatal("failed to set PromOption ", key, " to database, error: ", err)
+	}
 }
 
 func (cs *ClustersType) Get(name string) (*ClusterType, bool) {
@@ -61,17 +99,9 @@ func initClustersFromConfig() error {
 	opts := config.C.Clusters
 
 	for i := 0; i < len(opts); i++ {
-		cluster := &ClusterType{
-			Opts: opts[i],
-			Transport: &http.Transport{
-				// TLSClientConfig: tlsConfig,
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout: time.Duration(opts[i].DialTimeout) * time.Millisecond,
-				}).DialContext,
-				ResponseHeaderTimeout: time.Duration(opts[i].Timeout) * time.Millisecond,
-				MaxIdleConnsPerHost:   opts[i].MaxIdleConnsPerHost,
-			},
+		cluster := newClusterByOption(opts[i])
+		if cluster == nil {
+			continue
 		}
 		Clusters.Put(opts[i].Name, cluster)
 	}
@@ -87,9 +117,9 @@ type DSReply struct {
 			Settings struct {
 				PrometheusAddr  string `json:"prometheus.addr"`
 				PrometheusBasic struct {
-					PrometheusUser string `json:"promethues.user"`
-					PrometheusPass string `json:"promethues.password"`
-				} `json:"promethues.basic"`
+					PrometheusUser string `json:"prometheus.user"`
+					PrometheusPass string `json:"prometheus.password"`
+				} `json:"prometheus.basic"`
 				PrometheusTimeout int64 `json:"prometheus.timeout"`
 			} `json:"settings,omitempty"`
 		} `json:"items"`
@@ -137,6 +167,7 @@ func loadClustersFromAPI() {
 			logger.Errorf("read response body of %s fail: %v", url, err)
 			continue
 		}
+		logger.Debugf("curl %s success, response: %s", url, string(jsonBytes))
 
 		err = json.Unmarshal(jsonBytes, &reply)
 		if err != nil {
@@ -172,21 +203,60 @@ func loadClustersFromAPI() {
 				MaxIdleConnsPerHost: 32,
 			}
 
-			cluster := &ClusterType{
-				Opts: opt,
-				Transport: &http.Transport{
-					// TLSClientConfig: tlsConfig,
-					Proxy: http.ProxyFromEnvironment,
-					DialContext: (&net.Dialer{
-						Timeout: time.Duration(opt.DialTimeout) * time.Millisecond,
-					}).DialContext,
-					ResponseHeaderTimeout: time.Duration(opt.Timeout) * time.Millisecond,
-					MaxIdleConnsPerHost:   opt.MaxIdleConnsPerHost,
-				},
+			if strings.HasPrefix(opt.Prom, "https") {
+				opt.UseTLS = true
+				opt.InsecureSkipVerify = true
+			}
+
+			cluster := newClusterByOption(opt)
+			if cluster == nil {
+				continue
 			}
 
 			Clusters.Put(item.Name, cluster)
 			continue
 		}
 	}
+}
+
+func newClusterByOption(opt config.ClusterOptions) *ClusterType {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout: time.Duration(opt.DialTimeout) * time.Millisecond,
+		}).DialContext,
+		ResponseHeaderTimeout: time.Duration(opt.Timeout) * time.Millisecond,
+		MaxIdleConnsPerHost:   opt.MaxIdleConnsPerHost,
+	}
+
+	if opt.UseTLS {
+		tlsConfig, err := opt.TLSConfig()
+		if err != nil {
+			logger.Errorf("new cluster %s fail: %v", opt.Name, err)
+			return nil
+		}
+		transport.TLSClientConfig = tlsConfig
+	}
+
+	cli, err := api.NewClient(api.Config{
+		Address:      opt.Prom,
+		RoundTripper: transport,
+	})
+
+	if err != nil {
+		logger.Errorf("new client fail: %v", err)
+		return nil
+	}
+
+	cluster := &ClusterType{
+		Opts:      opt,
+		Transport: transport,
+		PromClient: prom.NewAPI(cli, prom.ClientOptions{
+			BasicAuthUser: opt.BasicAuthUser,
+			BasicAuthPass: opt.BasicAuthPass,
+			Headers:       opt.Headers,
+		}),
+	}
+
+	return cluster
 }

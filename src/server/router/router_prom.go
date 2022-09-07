@@ -17,7 +17,6 @@ import (
 	"github.com/didi/nightingale/v5/src/server/config"
 	"github.com/didi/nightingale/v5/src/server/idents"
 	"github.com/didi/nightingale/v5/src/server/memsto"
-	"github.com/didi/nightingale/v5/src/server/reader"
 	promstat "github.com/didi/nightingale/v5/src/server/stat"
 	"github.com/didi/nightingale/v5/src/server/writer"
 )
@@ -38,7 +37,12 @@ func queryPromql(c *gin.Context) {
 	var f promqlForm
 	ginx.BindJSON(c, &f)
 
-	value, warnings, err := reader.Reader.Client.Query(c.Request.Context(), f.PromQL, time.Now())
+	if config.ReaderClient.IsNil() {
+		c.String(500, "reader client is nil")
+		return
+	}
+
+	value, warnings, err := config.ReaderClient.GetCli().Query(c.Request.Context(), f.PromQL, time.Now())
 	if err != nil {
 		c.String(500, "promql:%s error:%v", f.PromQL, err)
 		return
@@ -50,6 +54,24 @@ func queryPromql(c *gin.Context) {
 	}
 
 	c.JSON(200, conv.ConvertVectors(value))
+}
+
+func duplicateLabelKey(series *prompb.TimeSeries) bool {
+	if series == nil {
+		return false
+	}
+
+	labelKeys := make(map[string]struct{})
+
+	for j := 0; j < len(series.Labels); j++ {
+		if _, has := labelKeys[series.Labels[j].Name]; has {
+			return true
+		} else {
+			labelKeys[series.Labels[j].Name] = struct{}{}
+		}
+	}
+
+	return false
 }
 
 func remoteWrite(c *gin.Context) {
@@ -74,6 +96,10 @@ func remoteWrite(c *gin.Context) {
 	)
 
 	for i := 0; i < count; i++ {
+		if duplicateLabelKey(req.Timeseries[i]) {
+			continue
+		}
+
 		ident = ""
 
 		// find ident label
@@ -120,7 +146,11 @@ func remoteWrite(c *gin.Context) {
 		writer.Writers.PushSample(metric, req.Timeseries[i])
 	}
 
-	promstat.CounterSampleTotal.WithLabelValues(config.C.ClusterName, "prometheus").Add(float64(count))
+	cn := config.ReaderClient.GetClusterName()
+	if cn != "" {
+		promstat.CounterSampleTotal.WithLabelValues(cn, "prometheus").Add(float64(count))
+	}
+
 	idents.Idents.MSet(ids)
 }
 

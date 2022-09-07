@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-contrib/pprof"
 	"github.com/gin-gonic/gin"
@@ -13,9 +14,11 @@ import (
 	"github.com/didi/nightingale/v5/src/pkg/aop"
 	"github.com/didi/nightingale/v5/src/server/config"
 	"github.com/didi/nightingale/v5/src/server/naming"
+
+	promstat "github.com/didi/nightingale/v5/src/server/stat"
 )
 
-func New(version string) *gin.Engine {
+func New(version string, reloadFunc func()) *gin.Engine {
 	gin.SetMode(config.C.RunMode)
 
 	loggerMid := aop.Logger()
@@ -34,12 +37,12 @@ func New(version string) *gin.Engine {
 		r.Use(loggerMid)
 	}
 
-	configRoute(r, version)
+	configRoute(r, version, reloadFunc)
 
 	return r
 }
 
-func configRoute(r *gin.Engine, version string) {
+func configRoute(r *gin.Engine, version string, reloadFunc func()) {
 	if config.C.HTTP.PProf {
 		pprof.Register(r, "/api/debug/pprof")
 	}
@@ -60,13 +63,18 @@ func configRoute(r *gin.Engine, version string) {
 		c.String(200, version)
 	})
 
+	r.POST("/-/reload", func(c *gin.Context) {
+		reloadFunc()
+		c.String(200, "reload success")
+	})
+
 	r.GET("/servers/active", func(c *gin.Context) {
-		lst, err := naming.ActiveServers(c.Request.Context(), config.C.ClusterName)
+		lst, err := naming.ActiveServers()
 		ginx.NewRender(c).Data(lst, err)
 	})
 
 	// use apiKey not basic auth
-	r.POST("/datadog/api/v1/series", datadogSeries)
+	r.POST("/datadog/api/v1/series", stat(), datadogSeries)
 	r.POST("/datadog/api/v1/check_run", datadogCheckRun)
 	r.GET("/datadog/api/v1/validate", datadogValidate)
 	r.POST("/datadog/api/v1/metadata", datadogMetadata)
@@ -77,12 +85,13 @@ func configRoute(r *gin.Engine, version string) {
 		r.Use(auth)
 	}
 
-	r.POST("/opentsdb/put", handleOpenTSDB)
-	r.POST("/openfalcon/push", falconPush)
-	r.POST("/prometheus/v1/write", remoteWrite)
-	r.POST("/prometheus/v1/query", queryPromql)
+	r.POST("/opentsdb/put", stat(), handleOpenTSDB)
+	r.POST("/openfalcon/push", stat(), falconPush)
+	r.POST("/prometheus/v1/write", stat(), remoteWrite)
+	r.POST("/prometheus/v1/query", stat(), queryPromql)
 
 	r.GET("/memory/alert-rule", alertRuleGet)
+	r.GET("/memory/alert-rule-location", alertRuleLocationGet)
 	r.GET("/memory/idents", identsGets)
 	r.GET("/memory/alert-mutes", mutesGets)
 	r.GET("/memory/alert-subscribes", subscribesGets)
@@ -94,4 +103,19 @@ func configRoute(r *gin.Engine, version string) {
 
 	service := r.Group("/v1/n9e")
 	service.POST("/event", pushEventToQueue)
+	service.POST("/make-event", makeEvent)
+	service.POST("/judge-event", judgeEvent)
+}
+
+func stat() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+
+		code := fmt.Sprintf("%d", c.Writer.Status())
+		method := c.Request.Method
+		labels := []string{code, c.FullPath(), method}
+
+		promstat.RequestDuration.WithLabelValues(labels...).Observe(time.Since(start).Seconds())
+	}
 }

@@ -43,9 +43,11 @@ CREATE INDEX user_group_update_at_idx ON user_group (update_at);
 insert into user_group(id, name, create_at, create_by, update_at, update_by) values(1, 'demo-root-group', date_part('epoch',current_timestamp)::int, 'root', date_part('epoch',current_timestamp)::int, 'root');
 
 CREATE TABLE user_group_member (
+    id bigserial,
     group_id bigint  not null,
     user_id bigint  not null
 ) ;
+ALTER TABLE user_group_member ADD CONSTRAINT user_group_member_pk PRIMARY KEY (id);
 CREATE INDEX user_group_member_group_id_idx ON user_group_member (group_id);
 CREATE INDEX user_group_member_user_id_idx ON user_group_member (user_id);
 
@@ -54,7 +56,7 @@ insert into user_group_member(group_id, user_id) values(1, 1);
 CREATE TABLE configs (
     id bigserial,
     ckey varchar(191) not null,
-    cval varchar(1024) not null default ''
+    cval varchar(4096) not null default ''
 ) ;
 ALTER TABLE configs ADD CONSTRAINT configs_pk PRIMARY KEY (id);
 ALTER TABLE configs ADD CONSTRAINT configs_un UNIQUE (ckey);
@@ -72,9 +74,11 @@ insert into role(name, note) values('Standard', 'Ordinary user role');
 insert into role(name, note) values('Guest', 'Readonly user role');
 
 CREATE TABLE role_operation(
+    id bigserial,
     role_name varchar(128) not null,
     operation varchar(191) not null
 ) ;
+ALTER TABLE role_operation ADD CONSTRAINT role_operation_pk PRIMARY KEY (id);
 CREATE INDEX role_operation_role_name_idx ON role_operation (role_name);
 CREATE INDEX role_operation_operation_idx ON role_operation (operation);
 
@@ -126,7 +130,36 @@ insert into role_operation(role_name, operation) values('Standard', '/job-tpls/d
 insert into role_operation(role_name, operation) values('Standard', '/job-tasks');
 insert into role_operation(role_name, operation) values('Standard', '/job-tasks/add');
 insert into role_operation(role_name, operation) values('Standard', '/job-tasks/put');
+insert into role_operation(role_name, operation) values('Standard', '/recording-rules');
+insert into role_operation(role_name, operation) values('Standard', '/recording-rules/add');
+insert into role_operation(role_name, operation) values('Standard', '/recording-rules/put');
+insert into role_operation(role_name, operation) values('Standard', '/recording-rules/del');
 
+CREATE TABLE recording_rule (
+    id bigserial NOT NULL,
+    group_id bigint not null default 0,
+    cluster varchar(128) not null,
+    name varchar(255) not null,
+    note varchar(255) not null,
+    disabled smallint not null,
+    prom_ql varchar(8192) not null,
+    prom_eval_interval int not null,
+    append_tags varchar(255) default '',
+    create_at bigint default 0,
+    create_by varchar(64) default '',
+    update_at bigint default 0,
+    update_by varchar(64) default '',
+    CONSTRAINT recording_rule_pk PRIMARY KEY (id)
+) ;
+CREATE INDEX recording_rule_group_id_idx ON recording_rule (group_id);
+CREATE INDEX recording_rule_update_at_idx ON recording_rule (update_at);
+COMMENT ON COLUMN recording_rule.group_id IS 'group_id';
+COMMENT ON COLUMN recording_rule.name IS 'new metric name';
+COMMENT ON COLUMN recording_rule.note IS 'rule note';
+COMMENT ON COLUMN recording_rule.disabled IS '0:enabled 1:disabled';
+COMMENT ON COLUMN recording_rule.prom_ql IS 'promql';
+COMMENT ON COLUMN recording_rule.prom_eval_interval IS 'evaluate interval';
+COMMENT ON COLUMN recording_rule.append_tags IS 'split by space: service=n9e mod=api';
 
 -- for alert_rule | collect_rule | mute | dashboard grouping
 CREATE TABLE busi_group (
@@ -228,38 +261,39 @@ ALTER TABLE chart_share ADD CONSTRAINT chart_share_pk PRIMARY KEY (id);
 CREATE INDEX chart_share_create_at_idx ON chart_share (create_at);
 
 CREATE TABLE alert_rule (
-	id bigserial NOT NULL,
-	group_id int8 NOT NULL DEFAULT 0,
-	"cluster" varchar(128) NOT NULL,
-	"name" varchar(255) NOT NULL,
-	note varchar(1024) NOT NULL,
-	severity int2 NOT NULL,
-	disabled int2 NOT NULL,
-	prom_for_duration int4 NOT NULL,
-	prom_ql text NOT NULL,
-	prom_eval_interval int4 NOT NULL,
-	enable_stime bpchar(5) NOT NULL DEFAULT '00:00'::bpchar,
-	enable_etime bpchar(5) NOT NULL DEFAULT '23:59'::bpchar,
-	enable_days_of_week varchar(32) NOT NULL DEFAULT ''::character varying,
-	enable_in_bg int2 NOT NULL DEFAULT 0,
-	notify_recovered int2 NOT NULL,
-	notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
-	notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
-	notify_repeat_step int4 NOT NULL DEFAULT 0,
-	notify_max_number int4 not null default 0,
-	recover_duration int4 NOT NULL DEFAULT 0,
-	callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
-	runbook_url varchar(255) NULL,
-	append_tags varchar(255) NOT NULL DEFAULT ''::character varying,
-	create_at int8 NOT NULL DEFAULT 0,
-	create_by varchar(64) NOT NULL DEFAULT ''::character varying,
-	update_at int8 NOT NULL DEFAULT 0,
-	update_by varchar(64) NOT NULL DEFAULT ''::character varying,
-	prod varchar(255) NOT NULL DEFAULT ''::character varying,
-	algorithm varchar(255) NOT NULL DEFAULT ''::character varying,
-	algo_params varchar(255) NULL,
-	delay int4 NOT NULL DEFAULT 0,
-	CONSTRAINT alert_rule_pk PRIMARY KEY (id)
+    id bigserial NOT NULL,
+    group_id int8 NOT NULL DEFAULT 0,
+    cate varchar(128) not null default '' ,
+    "cluster" varchar(128) NOT NULL,
+    "name" varchar(255) NOT NULL,
+    note varchar(1024) NOT NULL,
+    severity int2 NOT NULL,
+    disabled int2 NOT NULL,
+    prom_for_duration int4 NOT NULL,
+    prom_ql text NOT NULL,
+    prom_eval_interval int4 NOT NULL,
+    enable_stime bpchar(5) NOT NULL DEFAULT '00:00'::bpchar,
+    enable_etime bpchar(5) NOT NULL DEFAULT '23:59'::bpchar,
+    enable_days_of_week varchar(32) NOT NULL DEFAULT ''::character varying,
+    enable_in_bg int2 NOT NULL DEFAULT 0,
+    notify_recovered int2 NOT NULL,
+    notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_repeat_step int4 NOT NULL DEFAULT 0,
+    notify_max_number int4 not null default 0,
+    recover_duration int4 NOT NULL DEFAULT 0,
+    callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
+    runbook_url varchar(255) NULL,
+    append_tags varchar(255) NOT NULL DEFAULT ''::character varying,
+    create_at int8 NOT NULL DEFAULT 0,
+    create_by varchar(64) NOT NULL DEFAULT ''::character varying,
+    update_at int8 NOT NULL DEFAULT 0,
+    update_by varchar(64) NOT NULL DEFAULT ''::character varying,
+    prod varchar(255) NOT NULL DEFAULT ''::character varying,
+    algorithm varchar(255) NOT NULL DEFAULT ''::character varying,
+    algo_params varchar(255) NULL,
+    delay int4 NOT NULL DEFAULT 0,
+    CONSTRAINT alert_rule_pk PRIMARY KEY (id)
 );
 CREATE INDEX alert_rule_group_id_idx ON alert_rule USING btree (group_id);
 CREATE INDEX alert_rule_update_at_idx ON alert_rule USING btree (update_at);
@@ -285,6 +319,7 @@ COMMENT ON COLUMN alert_rule.append_tags IS 'split by space: service=n9e mod=api
 CREATE TABLE alert_mute (
     id bigserial,
     group_id bigint not null default 0 ,
+    cate varchar(128) not null default '' ,
     prod varchar(255) NOT NULL DEFAULT '' ,
     cluster varchar(128) not null,
     tags varchar(4096) not null default '' ,
@@ -304,7 +339,10 @@ COMMENT ON COLUMN alert_mute.etime IS 'end time';
 
 CREATE TABLE alert_subscribe (
     id bigserial,
+    "name" varchar(255) NOT NULL default '',
+    disabled int2 NOT NULL default 0 ,
     group_id bigint not null default 0 ,
+    cate varchar(128) not null default '' ,
     cluster varchar(128) not null,
     rule_id bigint not null default 0,
     tags jsonb not null ,
@@ -321,6 +359,7 @@ CREATE TABLE alert_subscribe (
 ALTER TABLE alert_subscribe ADD CONSTRAINT alert_subscribe_pk PRIMARY KEY (id);
 CREATE INDEX alert_subscribe_group_id_idx ON alert_subscribe (group_id);
 CREATE INDEX alert_subscribe_update_at_idx ON alert_subscribe (update_at);
+COMMENT ON COLUMN alert_subscribe.disabled IS '0:enabled 1:disabled';
 COMMENT ON COLUMN alert_subscribe.group_id IS 'busi group id';
 COMMENT ON COLUMN alert_subscribe.tags IS 'json,map,tagkey->regexp|value';
 COMMENT ON COLUMN alert_subscribe.redefine_severity IS 'is redefine severity?';
@@ -386,32 +425,35 @@ insert into alert_aggr_view(name, rule, cate) values('By BusiGroup, Severity', '
 insert into alert_aggr_view(name, rule, cate) values('By RuleName', 'field:rule_name', 0);
 
 CREATE TABLE alert_cur_event (
-	id bigserial NOT NULL,
-	"cluster" varchar(128) NOT NULL,
-	group_id int8 NOT NULL,
-	group_name varchar(255) NOT NULL DEFAULT ''::character varying,
-	hash varchar(64) NOT NULL,
-	rule_id int8 NOT NULL,
-	rule_name varchar(255) NOT NULL,
-	rule_note varchar(2048) NOT NULL DEFAULT 'alert rule note'::character varying,
-	severity int2 NOT NULL,
-	prom_for_duration int4 NOT NULL,
-	prom_ql varchar(8192) NOT NULL,
-	prom_eval_interval int4 NOT NULL,
-	callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
-	runbook_url varchar(255) NULL,
-	notify_recovered int2 NOT NULL,
-	notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
-	notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
-	notify_repeat_next int8 NOT NULL DEFAULT 0,
-	target_ident varchar(191) NOT NULL DEFAULT ''::character varying,
-	target_note varchar(191) NOT NULL DEFAULT ''::character varying,
-	trigger_time int8 NOT NULL,
-	trigger_value varchar(255) NOT NULL,
-	tags varchar(1024) NOT NULL DEFAULT ''::character varying,
-	rule_prod varchar(255) NOT NULL DEFAULT ''::character varying,
-	rule_algo varchar(255) NOT NULL DEFAULT ''::character varying,
-	CONSTRAINT alert_cur_event_pk PRIMARY KEY (id)
+    id bigserial NOT NULL,
+    cate varchar(128) not null default '' ,
+    "cluster" varchar(128) NOT NULL,
+    group_id int8 NOT NULL,
+    group_name varchar(255) NOT NULL DEFAULT ''::character varying,
+    hash varchar(64) NOT NULL,
+    rule_id int8 NOT NULL,
+    rule_name varchar(255) NOT NULL,
+    rule_note varchar(2048) NOT NULL DEFAULT 'alert rule note'::character varying,
+    severity int2 NOT NULL,
+    prom_for_duration int4 NOT NULL,
+    prom_ql varchar(8192) NOT NULL,
+    prom_eval_interval int4 NOT NULL,
+    callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
+    runbook_url varchar(255) NULL,
+    notify_recovered int2 NOT NULL,
+    notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_repeat_next int8 NOT NULL DEFAULT 0,
+    notify_cur_number int4 not null default 0,
+    target_ident varchar(191) NOT NULL DEFAULT ''::character varying,
+    target_note varchar(191) NOT NULL DEFAULT ''::character varying,
+    first_trigger_time int8,
+    trigger_time int8 NOT NULL,
+    trigger_value varchar(255) NOT NULL,
+    tags varchar(1024) NOT NULL DEFAULT ''::character varying,
+    rule_prod varchar(255) NOT NULL DEFAULT ''::character varying,
+    rule_algo varchar(255) NOT NULL DEFAULT ''::character varying,
+    CONSTRAINT alert_cur_event_pk PRIMARY KEY (id)
 );
 CREATE INDEX alert_cur_event_hash_idx ON alert_cur_event USING btree (hash);
 CREATE INDEX alert_cur_event_notify_repeat_next_idx ON alert_cur_event USING btree (notify_repeat_next);
@@ -436,34 +478,37 @@ COMMENT ON COLUMN alert_cur_event.target_note IS 'target note';
 COMMENT ON COLUMN alert_cur_event.tags IS 'merge data_tags rule_tags, split by ,,';
 
 CREATE TABLE alert_his_event (
-	id bigserial NOT NULL,
-	is_recovered int2 NOT NULL,
-	"cluster" varchar(128) NOT NULL,
-	group_id int8 NOT NULL,
-	group_name varchar(255) NOT NULL DEFAULT ''::character varying,
-	hash varchar(64) NOT NULL,
-	rule_id int8 NOT NULL,
-	rule_name varchar(255) NOT NULL,
-	rule_note varchar(2048) NOT NULL DEFAULT 'alert rule note'::character varying,
-	severity int2 NOT NULL,
-	prom_for_duration int4 NOT NULL,
-	prom_ql varchar(8192) NOT NULL,
-	prom_eval_interval int4 NOT NULL,
-	callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
-	runbook_url varchar(255) NULL,
-	notify_recovered int2 NOT NULL,
-	notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
-	notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
-	target_ident varchar(191) NOT NULL DEFAULT ''::character varying,
-	target_note varchar(191) NOT NULL DEFAULT ''::character varying,
-	trigger_time int8 NOT NULL,
-	trigger_value varchar(255) NOT NULL,
-	recover_time int8 NOT NULL DEFAULT 0,
-	last_eval_time int8 NOT NULL DEFAULT 0,
-	tags varchar(1024) NOT NULL DEFAULT ''::character varying,
-	rule_prod varchar(255) NOT NULL DEFAULT ''::character varying,
-	rule_algo varchar(255) NOT NULL DEFAULT ''::character varying,
-	CONSTRAINT alert_his_event_pk PRIMARY KEY (id)
+    id bigserial NOT NULL,
+    is_recovered int2 NOT NULL,
+    cate varchar(128) not null default '' ,
+    "cluster" varchar(128) NOT NULL,
+    group_id int8 NOT NULL,
+    group_name varchar(255) NOT NULL DEFAULT ''::character varying,
+    hash varchar(64) NOT NULL,
+    rule_id int8 NOT NULL,
+    rule_name varchar(255) NOT NULL,
+    rule_note varchar(2048) NOT NULL DEFAULT 'alert rule note'::character varying,
+    severity int2 NOT NULL,
+    prom_for_duration int4 NOT NULL,
+    prom_ql varchar(8192) NOT NULL,
+    prom_eval_interval int4 NOT NULL,
+    callbacks varchar(255) NOT NULL DEFAULT ''::character varying,
+    runbook_url varchar(255) NULL,
+    notify_recovered int2 NOT NULL,
+    notify_channels varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_groups varchar(255) NOT NULL DEFAULT ''::character varying,
+    notify_cur_number int4 not null default 0,
+    target_ident varchar(191) NOT NULL DEFAULT ''::character varying,
+    target_note varchar(191) NOT NULL DEFAULT ''::character varying,
+    first_trigger_time int8,
+    trigger_time int8 NOT NULL,
+    trigger_value varchar(255) NOT NULL,
+    recover_time int8 NOT NULL DEFAULT 0,
+    last_eval_time int8 NOT NULL DEFAULT 0,
+    tags varchar(1024) NOT NULL DEFAULT ''::character varying,
+    rule_prod varchar(255) NOT NULL DEFAULT ''::character varying,
+    rule_algo varchar(255) NOT NULL DEFAULT ''::character varying,
+    CONSTRAINT alert_his_event_pk PRIMARY KEY (id)
 );
 CREATE INDEX alert_his_event_hash_idx ON alert_his_event USING btree (hash);
 CREATE INDEX alert_his_event_rule_id_idx ON alert_his_event USING btree (rule_id);
@@ -547,3 +592,15 @@ CREATE INDEX task_record_create_by_idx ON task_record (create_by);
 
 COMMENT ON COLUMN task_record.id IS 'ibex task id';
 COMMENT ON COLUMN task_record.group_id IS 'busi group id';
+
+CREATE TABLE alerting_engines
+(
+    id bigserial NOT NULL,
+    instance varchar(128) not null default '',
+    cluster varchar(128) not null default '',
+    clock bigint not null
+) ;
+ALTER TABLE alerting_engines ADD CONSTRAINT alerting_engines_pk PRIMARY KEY (id);
+ALTER TABLE alerting_engines ADD CONSTRAINT alerting_engines_un UNIQUE (instance);
+COMMENT ON COLUMN alerting_engines.instance IS 'instance identification, e.g. 10.9.0.9:9090';
+COMMENT ON COLUMN alerting_engines.cluster IS 'target reader cluster';
