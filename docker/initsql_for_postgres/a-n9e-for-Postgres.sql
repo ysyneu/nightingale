@@ -198,7 +198,9 @@ CREATE TABLE board (
     id bigserial  not null ,
     group_id bigint not null default 0 ,
     name varchar(191) not null,
+    ident varchar(200) not null default '',
     tags varchar(255) not null ,
+    public smallint not null default 0,
     create_at bigint not null default 0,
     create_by varchar(64) not null default '',
     update_at bigint not null default 0,
@@ -208,6 +210,8 @@ ALTER TABLE board ADD CONSTRAINT board_pk PRIMARY KEY (id);
 ALTER TABLE board ADD CONSTRAINT board_un UNIQUE (group_id,"name");
 COMMENT ON COLUMN board.group_id IS 'busi group id';
 COMMENT ON COLUMN board.tags IS 'split by space';
+COMMENT ON COLUMN board.public IS '0:false 1:true';
+CREATE INDEX board_ident_idx ON board (ident);
 
 -- for dashboard new version
 CREATE TABLE board_payload (
@@ -321,13 +325,17 @@ CREATE TABLE alert_mute (
     group_id bigint not null default 0 ,
     cate varchar(128) not null default '' ,
     prod varchar(255) NOT NULL DEFAULT '' ,
+    note varchar(1024) not null default '',
     cluster varchar(128) not null,
     tags varchar(4096) not null default '' ,
     cause varchar(255) not null default '',
     btime bigint not null default 0 ,
     etime bigint not null default 0 ,
+    disabled smallint not null default 0 ,
     create_at bigint not null default 0,
-    create_by varchar(64) not null default ''
+    create_by varchar(64) not null default '',
+    update_at bigint not null default 0,
+    update_by varchar(64) not null default ''
 ) ;
 ALTER TABLE alert_mute ADD CONSTRAINT alert_mute_pk PRIMARY KEY (id);
 CREATE INDEX alert_mute_create_at_idx ON alert_mute (create_at);
@@ -336,6 +344,7 @@ COMMENT ON COLUMN alert_mute.group_id IS 'busi group id';
 COMMENT ON COLUMN alert_mute.tags IS 'json,map,tagkey->regexp|value';
 COMMENT ON COLUMN alert_mute.btime IS 'begin time';
 COMMENT ON COLUMN alert_mute.etime IS 'end time';
+COMMENT ON COLUMN alert_mute.disabled IS '0:enabled 1:disabled';
 
 CREATE TABLE alert_subscribe (
     id bigserial,
