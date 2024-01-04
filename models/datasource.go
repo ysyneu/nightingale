@@ -33,6 +33,7 @@ type Datasource struct {
 	UpdatedAt      int64                  `json:"updated_at"`
 	CreatedBy      string                 `json:"created_by"`
 	UpdatedBy      string                 `json:"updated_by"`
+	IsDefault      bool                   `json:"is_default"`
 	Transport      *http.Transport        `json:"-" gorm:"-"`
 }
 
@@ -49,6 +50,21 @@ type HTTP struct {
 	MaxIdleConnsPerHost int               `json:"max_idle_conns_per_host"`
 	Url                 string            `json:"url"`
 	Headers             map[string]string `json:"headers"`
+}
+
+func (h HTTP) IsLoki() bool {
+	if strings.Contains(h.Url, "loki") {
+		return true
+	}
+
+	for k := range h.Headers {
+		tmp := strings.ToLower(k)
+		if strings.Contains(tmp, "loki") {
+			return true
+		}
+	}
+
+	return false
 }
 
 type TLS struct {

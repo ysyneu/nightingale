@@ -26,6 +26,9 @@ func (ug *UserGroup) TableName() string {
 	return "user_group"
 }
 
+func (ug *UserGroup) DB2FE() error {
+	return nil
+}
 func (ug *UserGroup) Verify() error {
 	if str.Dangerous(ug.Name) {
 		return errors.New("Name has invalid characters")
@@ -114,7 +117,7 @@ func UserGroupGetByIds(ctx *ctx.Context, ids []int64) ([]UserGroup, error) {
 
 func UserGroupGetAll(ctx *ctx.Context) ([]*UserGroup, error) {
 	if !ctx.IsCenter {
-		lst, err := poster.GetByUrls[[]*UserGroup](ctx, "/v1/n9e/users")
+		lst, err := poster.GetByUrls[[]*UserGroup](ctx, "/v1/n9e/user-groups")
 		return lst, err
 	}
 

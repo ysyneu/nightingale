@@ -10,20 +10,21 @@ import (
 )
 
 type Pushgw struct {
-	BusiGroupLabelKey string
-	WriteConcurrency  int
-	LabelRewrite      bool
-	ForceUseServerTS  bool
-	DebugSample       map[string]string
-	WriterOpt         WriterGlobalOpt
-	Writers           []WriterOptions
+	BusiGroupLabelKey   string
+	IdentMetrics        []string
+	IdentStatsThreshold int
+	WriteConcurrency    int
+	LabelRewrite        bool
+	ForceUseServerTS    bool
+	DebugSample         map[string]string
+	DropSample          []map[string]string
+	WriterOpt           WriterGlobalOpt
+	Writers             []WriterOptions
 }
 
 type WriterGlobalOpt struct {
-	QueueCount   int
 	QueueMaxSize int
 	QueuePopSize int
-	ShardingKey  string
 }
 
 type WriterOptions struct {
@@ -73,16 +74,12 @@ func (p *Pushgw) PreCheck() {
 		p.WriterOpt.QueuePopSize = 1000
 	}
 
-	if p.WriterOpt.QueueCount <= 0 {
-		p.WriterOpt.QueueCount = 1000
-	}
-
-	if p.WriterOpt.ShardingKey == "" {
-		p.WriterOpt.ShardingKey = "ident"
-	}
-
 	if p.WriteConcurrency <= 0 {
 		p.WriteConcurrency = 5000
+	}
+
+	if p.IdentStatsThreshold <= 0 {
+		p.IdentStatsThreshold = 400
 	}
 
 	for _, writer := range p.Writers {

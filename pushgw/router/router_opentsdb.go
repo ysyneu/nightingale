@@ -86,7 +86,7 @@ func (m *HTTPMetric) ToProm() (*prompb.TimeSeries, error) {
 		return nil, fmt.Errorf("invalid metric name: %s", m.Metric)
 	}
 
-	pt.Labels = append(pt.Labels, &prompb.Label{
+	pt.Labels = append(pt.Labels, prompb.Label{
 		Name:  model.MetricNameLabel,
 		Value: m.Metric,
 	})
@@ -113,7 +113,7 @@ func (m *HTTPMetric) ToProm() (*prompb.TimeSeries, error) {
 			return nil, fmt.Errorf("invalid tag name: %s", key)
 		}
 
-		pt.Labels = append(pt.Labels, &prompb.Label{
+		pt.Labels = append(pt.Labels, prompb.Label{
 			Name:  key,
 			Value: value,
 		})
@@ -201,17 +201,10 @@ func (rt *Router) openTSDBPut(c *gin.Context) {
 			}
 		}
 
-		rt.EnrichLabels(pt)
-		rt.debugSample(c.Request.RemoteAddr, pt)
-
-		if rt.Pushgw.WriterOpt.ShardingKey == "ident" {
-			if host == "" {
-				rt.Writers.PushSample("-", pt)
-			} else {
-				rt.Writers.PushSample(host, pt)
-			}
+		if host != "" {
+			rt.ForwardByIdent(c.ClientIP(), host, pt)
 		} else {
-			rt.Writers.PushSample(arr[i].Metric, pt)
+			rt.ForwardByMetric(c.ClientIP(), arr[i].Metric, pt)
 		}
 
 		succ++

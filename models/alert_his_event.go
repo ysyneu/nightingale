@@ -52,6 +52,7 @@ type AlertHisEvent struct {
 	AnnotationsJSON    map[string]string `json:"annotations" gorm:"-"` // for fe
 	NotifyCurNumber    int               `json:"notify_cur_number"`    // notify: current number
 	FirstTriggerTime   int64             `json:"first_trigger_time"`   // 连续告警的首次告警时间
+	ExtraConfig        interface{}       `json:"extra_config" gorm:"-"`
 }
 
 func (e *AlertHisEvent) TableName() string {
@@ -67,7 +68,15 @@ func (e *AlertHisEvent) DB2FE() {
 	e.NotifyGroupsJSON = strings.Fields(e.NotifyGroups)
 	e.CallbacksJSON = strings.Fields(e.Callbacks)
 	e.TagsJSON = strings.Split(e.Tags, ",,")
-	json.Unmarshal([]byte(e.Annotations), &e.AnnotationsJSON)
+
+	if len(e.Annotations) > 0 {
+		err := json.Unmarshal([]byte(e.Annotations), &e.AnnotationsJSON)
+		if err != nil {
+			e.AnnotationsJSON = make(map[string]string)
+			e.AnnotationsJSON["error"] = e.Annotations
+		}
+	}
+
 	json.Unmarshal([]byte(e.RuleConfig), &e.RuleConfigJson)
 }
 

@@ -29,6 +29,8 @@ Port = 389
 BaseDn = 'dc=example,dc=org'
 BindUser = 'cn=manager,dc=example,dc=org'
 BindPass = '*******'
+# openldap format e.g. (&(uid=%s))
+# AD format e.g. (&(sAMAccountName=%s))
 AuthFilter = '(&(uid=%s))'
 CoverAttributes = true
 TLS = false
@@ -67,6 +69,7 @@ Email = 'email'
 const CAS = `
 Enable = false
 SsoAddr = 'https://cas.example.com/cas/'
+# LoginPath = ''
 RedirectURL = 'http://127.0.0.1:18000/callback/cas'
 DisplayName = 'CAS登录'
 CoverAttributes = false
@@ -143,6 +146,7 @@ func Init(center cconf.Center, ctx *ctx.Context) *SsoClient {
 			if err != nil {
 				log.Fatalln("init oidc failed:", err)
 			}
+			logger.Info("init oidc..")
 			oidcClient, err := oidcx.New(config)
 			if err != nil {
 				logger.Error("init oidc failed:", err)

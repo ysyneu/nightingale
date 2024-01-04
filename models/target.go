@@ -13,15 +13,17 @@ import (
 )
 
 type Target struct {
-	Id       int64             `json:"id" gorm:"primaryKey"`
-	GroupId  int64             `json:"group_id"`
-	GroupObj *BusiGroup        `json:"group_obj" gorm:"-"`
-	Ident    string            `json:"ident"`
-	Note     string            `json:"note"`
-	Tags     string            `json:"-"`
-	TagsJSON []string          `json:"tags" gorm:"-"`
-	TagsMap  map[string]string `json:"tags_maps" gorm:"-"` // internal use, append tags to series
-	UpdateAt int64             `json:"update_at"`
+	Id           int64             `json:"id" gorm:"primaryKey"`
+	GroupId      int64             `json:"group_id"`
+	GroupObj     *BusiGroup        `json:"group_obj" gorm:"-"`
+	Ident        string            `json:"ident"`
+	Note         string            `json:"note"`
+	Tags         string            `json:"-"`
+	TagsJSON     []string          `json:"tags" gorm:"-"`
+	TagsMap      map[string]string `json:"tags_maps" gorm:"-"` // internal use, append tags to series
+	UpdateAt     int64             `json:"update_at"`
+	HostIp       string            `json:"host_ip"` //ipv4，do not needs range select
+	AgentVersion string            `json:"agent_version"`
 
 	UnixTime   int64   `json:"unixtime" gorm:"-"`
 	Offset     int64   `json:"offset" gorm:"-"`
@@ -36,6 +38,10 @@ type Target struct {
 
 func (t *Target) TableName() string {
 	return "target"
+}
+
+func (t *Target) DB2FE() error {
+	return nil
 }
 
 func (t *Target) FillGroup(ctx *ctx.Context, cache map[int64]*BusiGroup) error {
@@ -81,15 +87,19 @@ func TargetDel(ctx *ctx.Context, idents []string) error {
 	return DB(ctx).Where("ident in ?", idents).Delete(new(Target)).Error
 }
 
-func buildTargetWhere(ctx *ctx.Context, bgid int64, dsIds []int64, query string) *gorm.DB {
+func buildTargetWhere(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64) *gorm.DB {
 	session := DB(ctx).Model(&Target{})
 
-	if bgid >= 0 {
-		session = session.Where("group_id=?", bgid)
+	if len(bgids) > 0 {
+		session = session.Where("group_id in (?)", bgids)
 	}
 
 	if len(dsIds) > 0 {
-		session = session.Where("datasource_id in ?", dsIds)
+		session = session.Where("datasource_id in (?)", dsIds)
+	}
+
+	if downtime > 0 {
+		session = session.Where("update_at < ?", time.Now().Unix()-downtime)
 	}
 
 	if query != "" {
@@ -107,13 +117,13 @@ func TargetTotalCount(ctx *ctx.Context) (int64, error) {
 	return Count(DB(ctx).Model(new(Target)))
 }
 
-func TargetTotal(ctx *ctx.Context, bgid int64, dsIds []int64, query string) (int64, error) {
-	return Count(buildTargetWhere(ctx, bgid, dsIds, query))
+func TargetTotal(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64) (int64, error) {
+	return Count(buildTargetWhere(ctx, bgids, dsIds, query, downtime))
 }
 
-func TargetGets(ctx *ctx.Context, bgid int64, dsIds []int64, query string, limit, offset int) ([]*Target, error) {
+func TargetGets(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64, limit, offset int) ([]*Target, error) {
 	var lst []*Target
-	err := buildTargetWhere(ctx, bgid, dsIds, query).Order("ident").Limit(limit).Offset(offset).Find(&lst).Error
+	err := buildTargetWhere(ctx, bgids, dsIds, query, downtime).Order("ident").Limit(limit).Offset(offset).Find(&lst).Error
 	if err == nil {
 		for i := 0; i < len(lst); i++ {
 			lst[i].TagsJSON = strings.Fields(lst[i].Tags)
@@ -298,13 +308,29 @@ func (t *Target) DelTags(ctx *ctx.Context, tags []string) error {
 func (t *Target) FillTagsMap() {
 	t.TagsJSON = strings.Fields(t.Tags)
 	t.TagsMap = make(map[string]string)
+	m := make(map[string]string)
 	for _, item := range t.TagsJSON {
 		arr := strings.Split(item, "=")
 		if len(arr) != 2 {
 			continue
 		}
-		t.TagsMap[arr[0]] = arr[1]
+		m[arr[0]] = arr[1]
 	}
+
+	t.TagsMap = m
+}
+
+func (t *Target) GetTagsMap() map[string]string {
+	tagsJSON := strings.Fields(t.Tags)
+	m := make(map[string]string)
+	for _, item := range tagsJSON {
+		arr := strings.Split(item, "=")
+		if len(arr) != 2 {
+			continue
+		}
+		m[arr[0]] = arr[1]
+	}
+	return m
 }
 
 func (t *Target) FillMeta(meta *HostMeta) {

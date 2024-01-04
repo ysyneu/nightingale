@@ -84,7 +84,7 @@ func (m *FalconMetric) ToProm() (*prompb.TimeSeries, string, error) {
 		return nil, "", fmt.Errorf("invalid metric name: %s", m.Metric)
 	}
 
-	pt.Labels = append(pt.Labels, &prompb.Label{
+	pt.Labels = append(pt.Labels, prompb.Label{
 		Name:  model.MetricNameLabel,
 		Value: m.Metric,
 	})
@@ -128,7 +128,7 @@ func (m *FalconMetric) ToProm() (*prompb.TimeSeries, string, error) {
 			return nil, "", fmt.Errorf("invalid tag name: %s", key)
 		}
 
-		pt.Labels = append(pt.Labels, &prompb.Label{
+		pt.Labels = append(pt.Labels, prompb.Label{
 			Name:  key,
 			Value: value,
 		})
@@ -206,17 +206,10 @@ func (rt *Router) falconPush(c *gin.Context) {
 			}
 		}
 
-		rt.EnrichLabels(pt)
-		rt.debugSample(c.Request.RemoteAddr, pt)
-
-		if rt.Pushgw.WriterOpt.ShardingKey == "ident" {
-			if ident == "" {
-				rt.Writers.PushSample("-", pt)
-			} else {
-				rt.Writers.PushSample(ident, pt)
-			}
+		if ident != "" {
+			rt.ForwardByIdent(c.ClientIP(), ident, pt)
 		} else {
-			rt.Writers.PushSample(arr[i].Metric, pt)
+			rt.ForwardByMetric(c.ClientIP(), arr[i].Metric, pt)
 		}
 
 		succ++

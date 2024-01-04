@@ -17,9 +17,12 @@ import (
 
 const (
 	METRIC = "metric"
+	LOG    = "logging"
 	HOST   = "host"
+	LOKI   = "loki"
 
 	PROMETHEUS = "prometheus"
+	TDENGINE   = "tdengine"
 )
 
 type AlertRule struct {
@@ -70,6 +73,8 @@ type AlertRule struct {
 	AppendTagsJSON        []string          `json:"append_tags" gorm:"-"`          // for fe
 	Annotations           string            `json:"-"`                             //
 	AnnotationsJSON       map[string]string `json:"annotations" gorm:"-"`          // for fe
+	ExtraConfig           string            `json:"-" gorm:"extra_config"`         // extra config
+	ExtraConfigJSON       interface{}       `json:"extra_config" gorm:"-"`         // for fe
 	CreateAt              int64             `json:"create_at"`
 	CreateBy              string            `json:"create_by"`
 	UpdateAt              int64             `json:"update_at"`
@@ -103,6 +108,7 @@ type HostTrigger struct {
 }
 
 type RuleQuery struct {
+	Inhibit  bool          `json:"inhibit"`
 	Queries  []interface{} `json:"queries"`
 	Triggers []Trigger     `json:"triggers"`
 }
@@ -157,8 +163,20 @@ func GetHostsQuery(queries []HostQuery) []map[string]interface{} {
 			}
 			if q.Op == "==" {
 				m["ident in (?)"] = lst
-			} else {
+			} else if q.Op == "!=" {
 				m["ident not in (?)"] = lst
+			} else if q.Op == "=~" {
+				blank := " "
+				for _, host := range lst {
+					m["ident like ?"+blank] = strings.ReplaceAll(host, "*", "%")
+					blank += " "
+				}
+			} else if q.Op == "!~" {
+				blank := " "
+				for _, host := range lst {
+					m["ident not like ?"+blank] = strings.ReplaceAll(host, "*", "%")
+					blank += " "
+				}
 			}
 		}
 		query = append(query, m)
@@ -408,7 +426,7 @@ func (ar *AlertRule) UpdateFieldsMap(ctx *ctx.Context, fields map[string]interfa
 }
 
 // for v5 rule
-func (ar *AlertRule) FillDatasourceIds(ctx *ctx.Context) error {
+func (ar *AlertRule) FillDatasourceIds() error {
 	if ar.DatasourceIds != "" {
 		json.Unmarshal([]byte(ar.DatasourceIds), &ar.DatasourceIdsJson)
 		return nil
@@ -418,7 +436,7 @@ func (ar *AlertRule) FillDatasourceIds(ctx *ctx.Context) error {
 
 func (ar *AlertRule) FillSeverities() error {
 	if ar.RuleConfig != "" {
-		if ar.Cate == PROMETHEUS {
+		if ar.Cate == PROMETHEUS || ar.Cate == LOKI {
 			var rule PromRuleConfig
 			if err := json.Unmarshal([]byte(ar.RuleConfig), &rule); err != nil {
 				return err
@@ -550,6 +568,7 @@ func (ar *AlertRule) FE2DB() error {
 			return fmt.Errorf("marshal rule_config err:%v", err)
 		}
 		ar.RuleConfig = string(b)
+		ar.PromQl = ""
 	}
 
 	if ar.AnnotationsJSON != nil {
@@ -560,10 +579,18 @@ func (ar *AlertRule) FE2DB() error {
 		ar.Annotations = string(b)
 	}
 
+	if ar.ExtraConfigJSON != nil {
+		b, err := json.Marshal(ar.ExtraConfigJSON)
+		if err != nil {
+			return fmt.Errorf("marshal extra_config err:%v", err)
+		}
+		ar.ExtraConfig = string(b)
+	}
+
 	return nil
 }
 
-func (ar *AlertRule) DB2FE(ctx *ctx.Context) error {
+func (ar *AlertRule) DB2FE() error {
 	ar.EnableStimesJSON = strings.Fields(ar.EnableStime)
 	ar.EnableEtimesJSON = strings.Fields(ar.EnableEtime)
 	if len(ar.EnableEtimesJSON) > 0 {
@@ -586,8 +613,9 @@ func (ar *AlertRule) DB2FE(ctx *ctx.Context) error {
 	json.Unmarshal([]byte(ar.AlgoParams), &ar.AlgoParamsJson)
 	json.Unmarshal([]byte(ar.RuleConfig), &ar.RuleConfigJson)
 	json.Unmarshal([]byte(ar.Annotations), &ar.AnnotationsJSON)
+	json.Unmarshal([]byte(ar.ExtraConfig), &ar.ExtraConfigJSON)
 
-	err := ar.FillDatasourceIds(ctx)
+	err := ar.FillDatasourceIds()
 	return err
 }
 
@@ -625,7 +653,7 @@ func AlertRuleExists(ctx *ctx.Context, id, groupId int64, datasourceIds []int64,
 
 	// match cluster
 	for _, r := range lst {
-		r.FillDatasourceIds(ctx)
+		r.FillDatasourceIds()
 		for _, id := range r.DatasourceIdsJson {
 			if MatchDatasource(datasourceIds, id) {
 				return true, nil
@@ -642,7 +670,21 @@ func AlertRuleGets(ctx *ctx.Context, groupId int64) ([]AlertRule, error) {
 	err := session.Find(&lst).Error
 	if err == nil {
 		for i := 0; i < len(lst); i++ {
-			lst[i].DB2FE(ctx)
+			lst[i].DB2FE()
+		}
+	}
+
+	return lst, err
+}
+
+func AlertRuleGetsByBGIds(ctx *ctx.Context, bgids []int64) ([]AlertRule, error) {
+	session := DB(ctx).Where("group_id in (?)", bgids).Order("name")
+
+	var lst []AlertRule
+	err := session.Find(&lst).Error
+	if err == nil {
+		for i := 0; i < len(lst); i++ {
+			lst[i].DB2FE()
 		}
 	}
 
@@ -674,7 +716,7 @@ func AlertRuleGetsAll(ctx *ctx.Context) ([]*AlertRule, error) {
 	}
 
 	for i := 0; i < len(lst); i++ {
-		lst[i].DB2FE(ctx)
+		lst[i].DB2FE()
 	}
 	return lst, nil
 }
@@ -714,7 +756,7 @@ func AlertRulesGetsBy(ctx *ctx.Context, prods []string, query, algorithm, cluste
 	err := session.Find(&lst).Error
 	if err == nil {
 		for i := 0; i < len(lst); i++ {
-			lst[i].DB2FE(ctx)
+			lst[i].DB2FE()
 		}
 	}
 
@@ -732,7 +774,7 @@ func AlertRuleGet(ctx *ctx.Context, where string, args ...interface{}) (*AlertRu
 		return nil, nil
 	}
 
-	lst[0].DB2FE(ctx)
+	lst[0].DB2FE()
 
 	return lst[0], nil
 }
@@ -776,12 +818,20 @@ func (ar *AlertRule) IsPrometheusRule() bool {
 	return ar.Prod == METRIC && ar.Cate == PROMETHEUS
 }
 
+func (ar *AlertRule) IsLokiRule() bool {
+	return ar.Prod == LOKI || ar.Cate == LOKI
+}
+
 func (ar *AlertRule) IsHostRule() bool {
 	return ar.Prod == HOST
 }
 
+func (ar *AlertRule) IsTdengineRule() bool {
+	return ar.Cate == TDENGINE
+}
+
 func (ar *AlertRule) GetRuleType() string {
-	if ar.Prod == METRIC {
+	if ar.Prod == METRIC || ar.Prod == LOG {
 		return ar.Cate
 	}
 
@@ -807,7 +857,6 @@ func (ar *AlertRule) UpdateEvent(event *AlertCurEvent) {
 	event.RuleProd = ar.Prod
 	event.RuleAlgo = ar.Algorithm
 	event.PromForDuration = ar.PromForDuration
-	event.PromQl = ar.PromQl
 	event.RuleConfig = ar.RuleConfig
 	event.RuleConfigJson = ar.RuleConfigJson
 	event.PromEvalInterval = ar.PromEvalInterval
@@ -819,7 +868,6 @@ func (ar *AlertRule) UpdateEvent(event *AlertCurEvent) {
 	event.NotifyChannelsJSON = ar.NotifyChannelsJSON
 	event.NotifyGroups = ar.NotifyGroups
 	event.NotifyGroupsJSON = ar.NotifyGroupsJSON
-	event.AnnotationsJSON = ar.AnnotationsJSON
 }
 
 func AlertRuleUpgradeToV6(ctx *ctx.Context, dsm map[string]Datasource) error {

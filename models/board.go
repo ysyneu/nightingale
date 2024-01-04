@@ -30,6 +30,10 @@ func (b *Board) TableName() string {
 	return "board"
 }
 
+func (b *Board) DB2FE() error {
+	return nil
+}
+
 func (b *Board) Verify() error {
 	if b.Name == "" {
 		return errors.New("Name is blank")
@@ -149,6 +153,27 @@ func BoardExists(ctx *ctx.Context, where string, args ...interface{}) (bool, err
 // BoardGets for list page
 func BoardGetsByGroupId(ctx *ctx.Context, groupId int64, query string) ([]Board, error) {
 	session := DB(ctx).Where("group_id=?", groupId).Order("name")
+
+	arr := strings.Fields(query)
+	if len(arr) > 0 {
+		for i := 0; i < len(arr); i++ {
+			if strings.HasPrefix(arr[i], "-") {
+				q := "%" + arr[i][1:] + "%"
+				session = session.Where("name not like ? and tags not like ?", q, q)
+			} else {
+				q := "%" + arr[i] + "%"
+				session = session.Where("(name like ? or tags like ?)", q, q)
+			}
+		}
+	}
+
+	var objs []Board
+	err := session.Find(&objs).Error
+	return objs, err
+}
+
+func BoardGetsByBGIds(ctx *ctx.Context, gids []int64, query string) ([]Board, error) {
+	session := DB(ctx).Where("group_id in (?)", gids).Order("name")
 
 	arr := strings.Fields(query)
 	if len(arr) > 0 {

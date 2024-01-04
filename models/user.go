@@ -23,6 +23,7 @@ const (
 	Dingtalk     = "dingtalk"
 	Wecom        = "wecom"
 	Feishu       = "feishu"
+	FeishuCard   = "feishucard"
 	Mm           = "mm"
 	Telegram     = "telegram"
 	Email        = "email"
@@ -33,6 +34,10 @@ const (
 	FeishuKey   = "feishu_robot_token"
 	MmKey       = "mm_webhook_url"
 	TelegramKey = "telegram_robot_token"
+)
+
+var (
+	DefaultChannels = []string{Dingtalk, Wecom, Feishu, Mm, Telegram, Email, FeishuCard}
 )
 
 type User struct {
@@ -56,6 +61,10 @@ type User struct {
 
 func (u *User) TableName() string {
 	return "users"
+}
+
+func (u *User) DB2FE() error {
+	return nil
 }
 
 func (u *User) String() string {
@@ -558,9 +567,10 @@ func (u *User) UserGroups(ctx *ctx.Context, limit int, query string) ([]UserGrou
 			return lst, err
 		}
 
+		var user *User
 		if len(lst) == 0 && len(query) > 0 {
 			// 隐藏功能，一般人不告诉，哈哈。query可能是给的用户名，所以上面的sql没有查到，当做user来查一下试试
-			user, err := UserGetByUsername(ctx, query)
+			user, err = UserGetByUsername(ctx, query)
 			if user == nil {
 				return lst, err
 			}
@@ -607,7 +617,7 @@ func (u *User) ExtractToken(key string) (string, bool) {
 	case Wecom:
 		ret := gjson.GetBytes(bs, WecomKey)
 		return ret.String(), ret.Exists()
-	case Feishu:
+	case Feishu, FeishuCard:
 		ret := gjson.GetBytes(bs, FeishuKey)
 		return ret.String(), ret.Exists()
 	case Mm:
