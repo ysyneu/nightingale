@@ -3,8 +3,6 @@ package router
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/ccfos/nightingale/v6/models"
@@ -21,14 +19,23 @@ func (rt *Router) recordingRuleGets(c *gin.Context) {
 }
 
 func (rt *Router) recordingRuleGetsByGids(c *gin.Context) {
-	gids := str.IdsInt64(ginx.QueryStr(c, "gids"), ",")
-	if len(gids) == 0 {
-		ginx.NewRender(c, http.StatusBadRequest).Message("arg(gids) is empty")
-		return
-	}
+	gids := str.IdsInt64(ginx.QueryStr(c, "gids", ""), ",")
+	if len(gids) > 0 {
+		for _, gid := range gids {
+			rt.bgroCheck(c, gid)
+		}
+	} else {
+		me := c.MustGet("user").(*models.User)
+		if !me.IsAdmin() {
+			var err error
+			gids, err = models.MyBusiGroupIds(rt.Ctx, me.Id)
+			ginx.Dangerous(err)
 
-	for _, gid := range gids {
-		rt.bgroCheck(c, gid)
+			if len(gids) == 0 {
+				ginx.NewRender(c).Data([]int{}, nil)
+				return
+			}
+		}
 	}
 
 	ars, err := models.RecordingRuleGetsByBGIds(rt.Ctx, gids)
@@ -63,6 +70,14 @@ func (rt *Router) recordingRuleAddByFE(c *gin.Context) {
 	count := len(lst)
 	if count == 0 {
 		ginx.Bomb(http.StatusBadRequest, "input json is empty")
+	}
+
+	for i := range lst {
+		if len(lst[i].DatasourceQueries) == 0 {
+			lst[i].DatasourceQueries = []models.DatasourceQuery{
+				models.DataSourceQueryAll,
+			}
+		}
 	}
 
 	bgid := ginx.UrlParamInt64(c, "id")
@@ -128,23 +143,10 @@ func (rt *Router) recordingRulePutFields(c *gin.Context) {
 	f.Fields["update_by"] = c.MustGet("username").(string)
 	f.Fields["update_at"] = time.Now().Unix()
 
-	if _, ok := f.Fields["datasource_ids"]; ok {
-		// datasource_ids = "1 2 3"
-		idsStr := strings.Fields(f.Fields["datasource_ids"].(string))
-		ids := make([]int64, 0)
-		for _, idStr := range idsStr {
-			id, err := strconv.ParseInt(idStr, 10, 64)
-			if err != nil {
-				ginx.Bomb(http.StatusBadRequest, "datasource_ids error")
-			}
-			ids = append(ids, id)
-		}
-
-		bs, err := json.Marshal(ids)
-		if err != nil {
-			ginx.Bomb(http.StatusBadRequest, "datasource_ids error")
-		}
-		f.Fields["datasource_ids"] = string(bs)
+	if datasourceQueries, ok := f.Fields["datasource_queries"]; ok {
+		bytes, err := json.Marshal(datasourceQueries)
+		ginx.Dangerous(err)
+		f.Fields["datasource_queries"] = string(bytes)
 	}
 
 	for i := 0; i < len(f.Ids); i++ {

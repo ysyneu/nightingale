@@ -25,7 +25,7 @@ services:
     network_mode: host
 
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:v2.55.1
     container_name: prometheus
     hostname: prometheus
     restart: always
@@ -41,23 +41,6 @@ services:
       - "--web.console.templates=/usr/share/prometheus/consoles"
       - "--enable-feature=remote-write-receiver"
       - "--query.lookback-delta=2m"
-
-  ibex:
-    image: flashcatcloud/ibex:v0.5.0
-    container_name: ibex
-    hostname: ibex
-    restart: always
-    environment:
-      GIN_MODE: release
-      TZ: Asia/Shanghai
-      WAIT_HOSTS: 127.0.0.1:3306
-    volumes:
-      - ./etc-ibex:/app/etc
-    network_mode: host
-    depends_on:
-      - mysql
-    command: >
-      sh -c "/app/ibex server"
 
   n9e:
     image: flashcatcloud/nightingale:latest

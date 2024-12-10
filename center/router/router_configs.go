@@ -1,12 +1,15 @@
 package router
 
 import (
-	"github.com/ccfos/nightingale/v6/models"
 	"time"
+
+	"github.com/ccfos/nightingale/v6/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/toolkits/pkg/ginx"
 )
+
+const EMBEDDEDDASHBOARD = "embedded-dashboards"
 
 func (rt *Router) configsGet(c *gin.Context) {
 	prefix := ginx.QueryStr(c, "prefix", "")
@@ -21,6 +24,11 @@ func (rt *Router) configGet(c *gin.Context) {
 	ginx.NewRender(c).Data(configs, err)
 }
 
+func (rt *Router) configGetAll(c *gin.Context) {
+	config, err := models.ConfigsGetAll(rt.Ctx)
+	ginx.NewRender(c).Data(config, err)
+}
+
 func (rt *Router) configGetByKey(c *gin.Context) {
 	config, err := models.ConfigsGet(rt.Ctx, ginx.QueryStr(c, "key"))
 	ginx.NewRender(c).Data(config, err)
@@ -31,6 +39,18 @@ func (rt *Router) configPutByKey(c *gin.Context) {
 	ginx.BindJSON(c, &f)
 	username := c.MustGet("username").(string)
 	ginx.NewRender(c).Message(models.ConfigsSetWithUname(rt.Ctx, f.Ckey, f.Cval, username))
+}
+
+func (rt *Router) embeddedDashboardsGet(c *gin.Context) {
+	config, err := models.ConfigsGet(rt.Ctx, EMBEDDEDDASHBOARD)
+	ginx.NewRender(c).Data(config, err)
+}
+
+func (rt *Router) embeddedDashboardsPut(c *gin.Context) {
+	var f models.Configs
+	ginx.BindJSON(c, &f)
+	username := c.MustGet("username").(string)
+	ginx.NewRender(c).Message(models.ConfigsSetWithUname(rt.Ctx, EMBEDDEDDASHBOARD, f.Cval, username))
 }
 
 func (rt *Router) configsDel(c *gin.Context) {

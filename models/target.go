@@ -1,68 +1,108 @@
 package models
 
 import (
+	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/ccfos/nightingale/v6/pkg/ctx"
 	"github.com/ccfos/nightingale/v6/pkg/poster"
+	"golang.org/x/exp/slices"
 
 	"github.com/pkg/errors"
+	"github.com/toolkits/pkg/container/set"
+
 	"gorm.io/gorm"
 )
+
+type TargetDeleteHookFunc func(ctx *ctx.Context, idents []string) error
 
 type Target struct {
 	Id           int64             `json:"id" gorm:"primaryKey"`
 	GroupId      int64             `json:"group_id"`
-	GroupObj     *BusiGroup        `json:"group_obj" gorm:"-"`
+	GroupObjs    []*BusiGroup      `json:"group_objs" gorm:"-"`
 	Ident        string            `json:"ident"`
 	Note         string            `json:"note"`
-	Tags         string            `json:"-"`
+	Tags         string            `json:"-"` // user tags
 	TagsJSON     []string          `json:"tags" gorm:"-"`
 	TagsMap      map[string]string `json:"tags_maps" gorm:"-"` // internal use, append tags to series
 	UpdateAt     int64             `json:"update_at"`
 	HostIp       string            `json:"host_ip"` //ipv4，do not needs range select
 	AgentVersion string            `json:"agent_version"`
+	EngineName   string            `json:"engine_name"`
+	OS           string            `json:"os" gorm:"column:os"`
+	HostTags     []string          `json:"host_tags" gorm:"serializer:json"`
 
-	UnixTime   int64   `json:"unixtime" gorm:"-"`
-	Offset     int64   `json:"offset" gorm:"-"`
-	TargetUp   float64 `json:"target_up" gorm:"-"`
-	MemUtil    float64 `json:"mem_util" gorm:"-"`
-	CpuNum     int     `json:"cpu_num" gorm:"-"`
-	CpuUtil    float64 `json:"cpu_util" gorm:"-"`
-	OS         string  `json:"os" gorm:"-"`
-	Arch       string  `json:"arch" gorm:"-"`
-	RemoteAddr string  `json:"remote_addr" gorm:"-"`
+	UnixTime   int64    `json:"unixtime" gorm:"-"`
+	Offset     int64    `json:"offset" gorm:"-"`
+	TargetUp   float64  `json:"target_up" gorm:"-"`
+	MemUtil    float64  `json:"mem_util" gorm:"-"`
+	CpuNum     int      `json:"cpu_num" gorm:"-"`
+	CpuUtil    float64  `json:"cpu_util" gorm:"-"`
+	Arch       string   `json:"arch" gorm:"-"`
+	RemoteAddr string   `json:"remote_addr" gorm:"-"`
+	GroupIds   []int64  `json:"group_ids" gorm:"-"`
+	GroupNames []string `json:"group_names" gorm:"-"`
 }
 
 func (t *Target) TableName() string {
 	return "target"
 }
 
-func (t *Target) DB2FE() error {
+func (t *Target) FillGroup(ctx *ctx.Context, cache map[int64]*BusiGroup) error {
+	var err error
+	if len(t.GroupIds) == 0 {
+		t.GroupIds, err = TargetGroupIdsGetByIdent(ctx, t.Ident)
+		if err != nil {
+			return errors.WithMessage(err, "failed to get target gids")
+		}
+		t.GroupObjs = make([]*BusiGroup, 0, len(t.GroupIds))
+	}
+
+	for _, gid := range t.GroupIds {
+		bg, has := cache[gid]
+		if has && bg != nil {
+			t.GroupObjs = append(t.GroupObjs, bg)
+			continue
+		}
+
+		bg, err := BusiGroupGetById(ctx, gid)
+		if err != nil {
+			return errors.WithMessage(err, "failed to get busi group")
+		}
+
+		if bg == nil {
+			continue
+		}
+
+		t.GroupObjs = append(t.GroupObjs, bg)
+		cache[gid] = bg
+	}
+
 	return nil
 }
 
-func (t *Target) FillGroup(ctx *ctx.Context, cache map[int64]*BusiGroup) error {
-	if t.GroupId <= 0 {
-		return nil
+func (t *Target) MatchGroupId(gid ...int64) bool {
+	for _, tgId := range t.GroupIds {
+		for _, id := range gid {
+			if tgId == id {
+				return true
+			}
+		}
 	}
+	return false
+}
 
-	bg, has := cache[t.GroupId]
-	if has {
-		t.GroupObj = bg
-		return nil
+func (t *Target) AfterFind(tx *gorm.DB) (err error) {
+	delta := time.Now().Unix() - t.UpdateAt
+	if delta < 60 {
+		t.TargetUp = 2
+	} else if delta < 180 {
+		t.TargetUp = 1
 	}
-
-	bg, err := BusiGroupGetById(ctx, t.GroupId)
-	if err != nil {
-		return errors.WithMessage(err, "failed to get busi group")
-	}
-
-	t.GroupObj = bg
-	cache[t.GroupId] = bg
-	return nil
+	t.FillTagsMap()
+	return
 }
 
 func TargetStatistics(ctx *ctx.Context) (*Statistics, error) {
@@ -80,50 +120,118 @@ func TargetStatistics(ctx *ctx.Context) (*Statistics, error) {
 	return stats[0], nil
 }
 
-func TargetDel(ctx *ctx.Context, idents []string) error {
+func TargetDel(ctx *ctx.Context, idents []string, deleteHook TargetDeleteHookFunc) error {
 	if len(idents) == 0 {
 		panic("idents empty")
 	}
-	return DB(ctx).Where("ident in ?", idents).Delete(new(Target)).Error
-}
 
-func buildTargetWhere(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64) *gorm.DB {
-	session := DB(ctx).Model(&Target{})
-
-	if len(bgids) > 0 {
-		session = session.Where("group_id in (?)", bgids)
-	}
-
-	if len(dsIds) > 0 {
-		session = session.Where("datasource_id in (?)", dsIds)
-	}
-
-	if downtime > 0 {
-		session = session.Where("update_at < ?", time.Now().Unix()-downtime)
-	}
-
-	if query != "" {
-		arr := strings.Fields(query)
-		for i := 0; i < len(arr); i++ {
-			q := "%" + arr[i] + "%"
-			session = session.Where("ident like ? or note like ? or tags like ?", q, q, q)
+	return DB(ctx).Transaction(func(tx *gorm.DB) error {
+		txErr := tx.Where("ident in ?", idents).Delete(new(Target)).Error
+		if txErr != nil {
+			return txErr
 		}
+		txErr = deleteHook(ctx, idents)
+		if txErr != nil {
+			return txErr
+		}
+		txErr = TargetDeleteBgids(ctx, idents)
+		if txErr != nil {
+			return txErr
+		}
+		return nil
+	})
+}
+
+type BuildTargetWhereOption func(session *gorm.DB) *gorm.DB
+
+func BuildTargetWhereWithBgids(bgids []int64) BuildTargetWhereOption {
+	return func(session *gorm.DB) *gorm.DB {
+		if len(bgids) == 1 && bgids[0] == 0 {
+			session = session.Joins("left join target_busi_group on target.ident = " +
+				"target_busi_group.target_ident").Where("target_busi_group.target_ident is null")
+		} else if len(bgids) > 0 {
+			if slices.Contains(bgids, 0) {
+				session = session.Joins("left join target_busi_group on target.ident = target_busi_group.target_ident").
+					Where("target_busi_group.target_ident is null OR target_busi_group.group_id in (?)", bgids)
+			} else {
+				session = session.Joins("join target_busi_group on target.ident = "+
+					"target_busi_group.target_ident").Where("target_busi_group.group_id in (?)", bgids)
+			}
+		}
+		return session
 	}
-
-	return session
 }
 
-func TargetTotalCount(ctx *ctx.Context) (int64, error) {
-	return Count(DB(ctx).Model(new(Target)))
+func BuildTargetWhereWithDsIds(dsIds []int64) BuildTargetWhereOption {
+	return func(session *gorm.DB) *gorm.DB {
+		if len(dsIds) > 0 {
+			session = session.Where("datasource_id in (?)", dsIds)
+		}
+		return session
+	}
 }
 
-func TargetTotal(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64) (int64, error) {
-	return Count(buildTargetWhere(ctx, bgids, dsIds, query, downtime))
+func BuildTargetWhereWithHosts(hosts []string) BuildTargetWhereOption {
+	return func(session *gorm.DB) *gorm.DB {
+		if len(hosts) > 0 {
+			session = session.Where("ident in (?) or host_ip in (?)", hosts, hosts)
+		}
+		return session
+	}
 }
 
-func TargetGets(ctx *ctx.Context, bgids []int64, dsIds []int64, query string, downtime int64, limit, offset int) ([]*Target, error) {
+func BuildTargetWhereWithQuery(query string) BuildTargetWhereOption {
+	return func(session *gorm.DB) *gorm.DB {
+		if query != "" {
+			arr := strings.Fields(query)
+			for i := 0; i < len(arr); i++ {
+				if strings.HasPrefix(arr[i], "-") {
+					q := "%" + arr[i][1:] + "%"
+					session = session.Where("ident not like ? and host_ip not like ? and "+
+						"note not like ? and tags not like ? and (host_tags not like ? or "+
+						"host_tags is null) and os not like ?", q, q, q, q, q, q)
+				} else {
+					q := "%" + arr[i] + "%"
+					session = session.Where("ident like ? or host_ip like ? or note like ? or "+
+						"tags like ? or host_tags like ? or os like ?", q, q, q, q, q, q)
+				}
+			}
+		}
+		return session
+	}
+}
+
+func BuildTargetWhereWithDowntime(downtime int64) BuildTargetWhereOption {
+	return func(session *gorm.DB) *gorm.DB {
+		if downtime > 0 {
+			session = session.Where("target.update_at < ?", time.Now().Unix()-downtime)
+		} else if downtime < 0 {
+			session = session.Where("target.update_at > ?", time.Now().Unix()+downtime)
+		}
+		return session
+	}
+}
+
+func buildTargetWhere(ctx *ctx.Context, options ...BuildTargetWhereOption) *gorm.DB {
+	sub := DB(ctx).Model(&Target{}).Distinct("target.ident")
+	for _, opt := range options {
+		sub = opt(sub)
+	}
+	return DB(ctx).Model(&Target{}).Where("ident in (?)", sub)
+}
+
+func TargetTotal(ctx *ctx.Context, options ...BuildTargetWhereOption) (int64, error) {
+	return Count(buildTargetWhere(ctx, options...))
+}
+
+func TargetGets(ctx *ctx.Context, limit, offset int, order string, desc bool, options ...BuildTargetWhereOption) ([]*Target, error) {
 	var lst []*Target
-	err := buildTargetWhere(ctx, bgids, dsIds, query, downtime).Order("ident").Limit(limit).Offset(offset).Find(&lst).Error
+	if desc {
+		order += " desc"
+	} else {
+		order += " asc"
+	}
+	err := buildTargetWhere(ctx, options...).Order(order).Limit(limit).Offset(offset).Find(&lst).Error
 	if err == nil {
 		for i := 0; i < len(lst); i++ {
 			lst[i].TagsJSON = strings.Fields(lst[i].Tags)
@@ -167,14 +275,21 @@ func MissTargetCountByFilter(ctx *ctx.Context, query []map[string]interface{}, t
 }
 
 func TargetFilterQueryBuild(ctx *ctx.Context, query []map[string]interface{}, limit, offset int) *gorm.DB {
-	session := DB(ctx).Model(&Target{})
+	sub := DB(ctx).Model(&Target{}).Distinct("target.ident").Joins("left join " +
+		"target_busi_group on target.ident = target_busi_group.target_ident")
 	for _, q := range query {
 		tx := DB(ctx).Model(&Target{})
 		for k, v := range q {
-			tx = tx.Or(k, v)
+			if strings.Count(k, "?") > 1 {
+				tx = tx.Or(k, v.([]interface{})...)
+			} else {
+				tx = tx.Or(k, v)
+			}
 		}
-		session = session.Where(tx)
+		sub = sub.Where(tx)
 	}
+
+	session := DB(ctx).Model(&Target{}).Where("ident in (?)", sub)
 
 	if limit > 0 {
 		session = session.Limit(limit).Offset(offset)
@@ -191,9 +306,20 @@ func TargetGetsAll(ctx *ctx.Context) ([]*Target, error) {
 
 	var lst []*Target
 	err := DB(ctx).Model(&Target{}).Find(&lst).Error
+	if err != nil {
+		return lst, err
+	}
+
+	tgs, err := TargetBusiGroupsGetAll(ctx)
+	if err != nil {
+		return lst, err
+	}
+
 	for i := 0; i < len(lst); i++ {
 		lst[i].FillTagsMap()
+		lst[i].GroupIds = tgs[lst[i].Ident]
 	}
+
 	return lst, err
 }
 
@@ -241,15 +367,72 @@ func TargetGetByIdent(ctx *ctx.Context, ident string) (*Target, error) {
 	return TargetGet(ctx, "ident = ?", ident)
 }
 
-func TargetGetTags(ctx *ctx.Context, idents []string) ([]string, error) {
+func TargetsGetByIdents(ctx *ctx.Context, idents []string) ([]*Target, error) {
+	var targets []*Target
+	err := DB(ctx).Where("ident IN ?", idents).Find(&targets).Error
+	return targets, err
+}
+
+func TargetsGetIdentsByIdentsAndHostIps(ctx *ctx.Context, idents, hostIps []string) (map[string]string, []string, error) {
+	inexistence := make(map[string]string)
+	identSet := set.NewStringSet()
+
+	// Query the ident corresponding to idents
+	if len(idents) > 0 {
+		var identsFromIdents []string
+		err := DB(ctx).Model(&Target{}).Where("ident IN ?", idents).Pluck("ident", &identsFromIdents).Error
+		if err != nil {
+			return nil, nil, err
+		}
+
+		for _, ident := range identsFromIdents {
+			identSet.Add(ident)
+		}
+
+		for _, ident := range idents {
+			if !identSet.Exists(ident) {
+				inexistence[ident] = "Ident not found"
+			}
+		}
+	}
+
+	// Query the hostIp corresponding to idents
+	if len(hostIps) > 0 {
+		var hostIpToIdentMap []struct {
+			HostIp string
+			Ident  string
+		}
+		err := DB(ctx).Model(&Target{}).Select("host_ip, ident").Where("host_ip IN ?", hostIps).Scan(&hostIpToIdentMap).Error
+		if err != nil {
+			return nil, nil, err
+		}
+
+		hostIpToIdent := set.NewStringSet()
+		for _, entry := range hostIpToIdentMap {
+			hostIpToIdent.Add(entry.HostIp)
+			identSet.Add(entry.Ident)
+		}
+
+		for _, hostIp := range hostIps {
+			if !hostIpToIdent.Exists(hostIp) {
+				inexistence[hostIp] = "HostIp not found"
+			}
+		}
+	}
+
+	return inexistence, identSet.ToSlice(), nil
+}
+
+func TargetGetTags(ctx *ctx.Context, idents []string, ignoreHostTag bool, bgLabelKey string) (
+	[]string, error) {
 	session := DB(ctx).Model(new(Target))
 
-	var arr []string
+	var arr []*Target
 	if len(idents) > 0 {
 		session = session.Where("ident in ?", idents)
 	}
 
-	err := session.Select("distinct(tags) as tags").Pluck("tags", &arr).Error
+	err := session.Select("tags", "host_tags").Find(&arr).Error
 	if err != nil {
 		return nil, err
 	}
@@ -261,9 +444,15 @@ func TargetGetTags(ctx *ctx.Context, idents []string) ([]string, error) {
 
 	set := make(map[string]struct{})
 	for i := 0; i < cnt; i++ {
-		tags := strings.Fields(arr[i])
+		tags := strings.Fields(arr[i].Tags)
 		for j := 0; j < len(tags); j++ {
 			set[tags[j]] = struct{}{}
+		}
+
+		if !ignoreHostTag {
+			for _, ht := range arr[i].HostTags {
+				set[ht] = struct{}{}
+			}
 		}
 	}
 
@@ -273,7 +462,22 @@ func TargetGetTags(ctx *ctx.Context, idents []string) ([]string, error) {
 		ret = append(ret, key)
 	}
 
-	sort.Strings(ret)
+	if bgLabelKey != "" {
+		sort.Slice(ret, func(i, j int) bool {
+			if strings.HasPrefix(ret[i], bgLabelKey) && strings.HasPrefix(ret[j], bgLabelKey) {
+				return ret[i] < ret[j]
+			}
+			if strings.HasPrefix(ret[i], bgLabelKey) {
+				return true
+			}
+			if strings.HasPrefix(ret[j], bgLabelKey) {
+				return false
+			}
+			return ret[i] < ret[j]
+		})
+	} else {
+		sort.Strings(ret)
+	}
 
 	return ret, err
 }
@@ -295,8 +499,8 @@ func (t *Target) AddTags(ctx *ctx.Context, tags []string) error {
 }
 
 func (t *Target) DelTags(ctx *ctx.Context, tags []string) error {
-	for i := 0; i < len(tags); i++ {
-		t.Tags = strings.ReplaceAll(t.Tags, tags[i]+" ", "")
+	for _, tag := range tags {
+		t.Tags = strings.ReplaceAll(t.Tags, tag+" ", "")
 	}
 
 	return DB(ctx).Model(t).Updates(map[string]interface{}{
@@ -309,7 +513,8 @@ func (t *Target) FillTagsMap() {
 	t.TagsJSON = strings.Fields(t.Tags)
 	t.TagsMap = make(map[string]string)
 	m := make(map[string]string)
-	for _, item := range t.TagsJSON {
+	allTags := append(t.TagsJSON, t.HostTags...)
+	for _, item := range allTags {
 		arr := strings.Split(item, "=")
 		if len(arr) != 2 {
 			continue
@@ -324,6 +529,16 @@ func (t *Target) GetTagsMap() map[string]string {
 	tagsJSON := strings.Fields(t.Tags)
 	m := make(map[string]string)
 	for _, item := range tagsJSON {
+		if arr := strings.Split(item, "="); len(arr) == 2 {
+			m[arr[0]] = arr[1]
+		}
+	}
+	return m
+}
+
+func (t *Target) GetHostTagsMap() map[string]string {
+	m := make(map[string]string)
+	for _, item := range t.HostTags {
 		arr := strings.Split(item, "=")
 		if len(arr) != 2 {
 			continue
@@ -339,7 +554,6 @@ func (t *Target) FillMeta(meta *HostMeta) {
 	t.CpuNum = meta.CpuNum
 	t.UnixTime = meta.UnixTime
 	t.Offset = meta.Offset
-	t.OS = meta.OS
 	t.Arch = meta.Arch
 	t.RemoteAddr = meta.RemoteAddr
 }
@@ -378,4 +592,89 @@ func IdentsFilter(ctx *ctx.Context, idents []string, where string, args ...inter
 
 func (m *Target) UpdateFieldsMap(ctx *ctx.Context, fields map[string]interface{}) error {
 	return DB(ctx).Model(m).Updates(fields).Error
+}
+
+// 1. 是否可以进行 busi_group 迁移
+func CanMigrateBg(ctx *ctx.Context) bool {
+	// 1.1 检查 target 表是否为空
+	var cnt int64
+	if err := DB(ctx).Model(&Target{}).Count(&cnt).Error; err != nil {
+		log.Println("failed to get target table count, err:", err)
+		return false
+	}
+	if cnt == 0 {
+		log.Println("target table is empty, skip migration.")
+		return false
+	}
+
+	// 1.2 判断是否已经完成迁移
+	var maxGroupId int64
+	if err := DB(ctx).Model(&Target{}).Select("MAX(group_id)").Scan(&maxGroupId).Error; err != nil {
+		log.Println("failed to get max group_id from target table, err:", err)
+		return false
+	}
+
+	if maxGroupId == 0 {
+		return false
+	}
+
+	return true
+}
+
+func MigrateBg(ctx *ctx.Context, bgLabelKey string) {
+	err := DoMigrateBg(ctx, bgLabelKey)
+	if err != nil {
+		log.Println("failed to migrate bgid, err:", err)
+		return
+	}
+
+	log.Println("migration bgid has been completed")
+}
+
+func DoMigrateBg(ctx *ctx.Context, bgLabelKey string) error {
+	// 2. 获取全量 target
+	targets, err := TargetGetsAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	// 3. 获取全量 busi_group
+	bgs, err := BusiGroupGetAll(ctx)
+	if err != nil {
+		return err
+	}
+
+	bgById := make(map[int64]*BusiGroup, len(bgs))
+	for _, bg := range bgs {
+		bgById[bg.Id] = bg
+	}
+
+	// 4. 如果某 busi_group 有 label，将其存至对应的 target tags 中
+	for _, t := range targets {
+		if t.GroupId == 0 {
+			continue
+		}
+		err := DB(ctx).Transaction(func(tx *gorm.DB) error {
+			// 4.1 将 group_id 迁移至关联表
+			if err := TargetBindBgids(ctx, []string{t.Ident}, []int64{t.GroupId}, nil); err != nil {
+				return err
+			}
+			if err := TargetUpdateBgid(ctx, []string{t.Ident}, 0, false); err != nil {
+				return err
+			}
+
+			// 4.2 判断该机器是否需要新增 tag
+			if bg, ok := bgById[t.GroupId]; !ok || bg.LabelEnable == 0 ||
+				strings.Contains(t.Tags, bgLabelKey+"=") {
+				return nil
+			} else {
+				return t.AddTags(ctx, []string{bgLabelKey + "=" + bg.LabelValue})
+			}
+		})
+		if err != nil {
+			log.Printf("failed to migrate %v bg, err: %v\n", t.Ident, err)
+			continue
+		}
+	}
+	return nil
 }

@@ -48,6 +48,8 @@ type AlertSubscribe struct {
 	ITags             []TagFilter  `json:"-" gorm:"-"` // inner tags
 	BusiGroups        ormx.JSONArr `json:"busi_groups"`
 	IBusiGroups       []TagFilter  `json:"-" gorm:"-"` // inner busiGroups
+	RuleIds           []int64      `json:"rule_ids" gorm:"serializer:json"`
+	RuleNames         []string     `json:"rule_names" gorm:"-"`
 }
 
 func (s *AlertSubscribe) TableName() string {
@@ -59,8 +61,13 @@ func AlertSubscribeGets(ctx *ctx.Context, groupId int64) (lst []AlertSubscribe, 
 	return
 }
 
-func AlertSubscribeGetsByBGIds(ctx *ctx.Context, bgIds []int64) (lst []AlertSubscribe, err error) {
-	err = DB(ctx).Where("group_id in (?)", bgIds).Order("id desc").Find(&lst).Error
+func AlertSubscribeGetsByBGIds(ctx *ctx.Context, bgids []int64) (lst []AlertSubscribe, err error) {
+	session := DB(ctx)
+	if len(bgids) > 0 {
+		session = session.Where("group_id in (?)", bgids)
+	}
+
+	err = session.Order("id desc").Find(&lst).Error
 	return
 }
 
@@ -105,6 +112,11 @@ func (s *AlertSubscribe) Verify() error {
 
 	if len(s.SeveritiesJson) == 0 {
 		return errors.New("severities is required")
+	}
+
+	if s.UserGroupIds != "" && s.NewChannels == "" {
+		// 如果指定了用户组，那么新告警的通知渠道必须指定，否则容易出现告警规则中没有指定通知渠道，导致订阅通知时，没有通知渠道
+		return errors.New("new_channels is required")
 	}
 
 	ugids := strings.Fields(s.UserGroupIds)
@@ -192,29 +204,52 @@ func (s *AlertSubscribe) Add(ctx *ctx.Context) error {
 	return Insert(ctx, s)
 }
 
-func (s *AlertSubscribe) FillRuleName(ctx *ctx.Context, cache map[int64]string) error {
-	if s.RuleId <= 0 {
-		s.RuleName = ""
+func (s *AlertSubscribe) CompatibleWithOldRuleId() {
+	if len(s.RuleIds) == 0 && s.RuleId != 0 {
+		s.RuleIds = append(s.RuleIds, s.RuleId)
+	}
+}
+
+func (s *AlertSubscribe) FillRuleNames(ctx *ctx.Context, cache map[int64]string) error {
+	s.CompatibleWithOldRuleId()
+	if len(s.RuleIds) == 0 {
 		return nil
 	}
 
-	name, has := cache[s.RuleId]
-	if has {
-		s.RuleName = name
-		return nil
+	idNameHas := make(map[int64]string, len(s.RuleIds))
+	idsNotInCache := make([]int64, 0)
+	for _, rid := range s.RuleIds {
+		rname, exist := cache[rid]
+		if exist {
+			idNameHas[rid] = rname
+		} else {
+			idsNotInCache = append(idsNotInCache, rid)
+		}
 	}
 
-	name, err := AlertRuleGetName(ctx, s.RuleId)
-	if err != nil {
-		return err
+	if len(idsNotInCache) > 0 {
+		lst, err := AlertRuleGetsByIds(ctx, idsNotInCache)
+		if err != nil {
+			return err
+		}
+		for _, alterRule := range lst {
+			idNameHas[alterRule.Id] = alterRule.Name
+			cache[alterRule.Id] = alterRule.Name
+		}
 	}
 
-	if name == "" {
-		name = "Error: AlertRule not found"
+	names := make([]string, len(s.RuleIds))
+	for i, rid := range s.RuleIds {
+		if name, exist := idNameHas[rid]; exist {
+			names[i] = name
+		} else if rid == 0 {
+			names[i] = ""
+		} else {
+			names[i] = "Error: AlertRule not found"
+		}
 	}
+	s.RuleNames = names
 
-	s.RuleName = name
-	cache[s.RuleId] = name
 	return nil
 }
 
@@ -364,6 +399,10 @@ func (s *AlertSubscribe) ModifyEvent(event *AlertCurEvent) {
 	if s.RedefineWebhooks == 1 {
 		event.Callbacks = s.Webhooks
 		event.CallbacksJSON = s.WebhooksJson
+	} else {
+		// 将 callback 重置为空，防止事件被订阅之后，再次将事件发送给回调地址
+		event.Callbacks = ""
+		event.CallbacksJSON = []string{}
 	}
 
 	event.NotifyGroups = s.UserGroupIds

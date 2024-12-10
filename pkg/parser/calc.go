@@ -1,203 +1,99 @@
 package parser
 
 import (
-	"fmt"
-	"strconv"
+	"regexp"
+	"strings"
 
+	"github.com/expr-lang/expr"
 	"github.com/toolkits/pkg/logger"
 )
 
-func MathCalc(s string, data map[string]float64) (float64, error) {
-	var err error
-	p := NewParser([]rune(s))
-	err = p.Parse()
+var defaultFuncMap = map[string]interface{}{
+	"between": between,
+}
+
+func MathCalc(s string, data map[string]interface{}) (float64, error) {
+	m := make(map[string]interface{})
+	for k, v := range data {
+		m[cleanStr(k)] = v
+	}
+
+	for k, v := range defaultFuncMap {
+		m[k] = v
+	}
+
+	// 表达式要求类型一致，否则此处编译会报错
+	program, err := expr.Compile(cleanStr(s), expr.Env(m))
 	if err != nil {
 		return 0, err
 	}
 
-	for _, stat := range p.Stats() {
-		v, err := eval(stat, data)
-		if err != nil {
-			return 0, err
-		}
-		logger.Infof("exp:%s res:%v", s, v)
-		return v, nil
+	output, err := expr.Run(program, m)
+	if err != nil {
+		return 0, err
 	}
 
-	return 0, err
+	if result, ok := output.(float64); ok {
+		return result, nil
+	} else if result, ok := output.(bool); ok {
+		if result {
+			return 1, nil
+		} else {
+			return 0, nil
+		}
+	} else if result, ok := output.(int); ok {
+		return float64(result), nil
+	} else {
+		return 0, nil
+	}
 }
 
-func Calc(s string, data map[string]float64) bool {
-	var err error
-	p := NewParser([]rune(s))
-	err = p.Parse()
+func Calc(s string, data map[string]interface{}) bool {
+	v, err := MathCalc(s, data)
 	if err != nil {
-		logger.Errorf("parse err:%v", err)
+		logger.Errorf("Calc exp:%s data:%v error: %v", s, data, err)
 		return false
 	}
 
-	for _, stat := range p.Stats() {
-		v, err := eval(stat, data)
-		if err != nil {
-			logger.Error("eval error:", err)
-			return false
-		}
-		logger.Infof("exp:%s res:%v", s, v)
-		if v > 0.0 {
-			return true
-		}
-	}
-
-	return false
+	return v > 0
 }
 
-func eval(stat Node, data map[string]float64) (float64, error) {
-	switch node := stat.(type) {
-	case *BinaryNode:
-		return evalBinary(node, data)
-	case *IdentifierNode:
-		return get(node.Lit, data)
-	case *NumberNode:
-		return evaluateNumber(node)
+func cleanStr(s string) string {
+	s = replaceDollarSigns(s)
+	s = strings.ReplaceAll(s, "$.", "")
+	return s
+}
+
+func replaceDollarSigns(s string) string {
+	re := regexp.MustCompile(`\$([A-Z])\.`)
+	return re.ReplaceAllString(s, "${1}_")
+}
+
+// 自定义 expr 函数
+// between 函数，判断 target 是否在 arr[0] 和 arr[1] 之间
+func between(target float64, arr []interface{}) bool {
+	if len(arr) != 2 {
+		return false
+	}
+
+	var min, max float64
+	switch arr[0].(type) {
+	case float64:
+		min = arr[0].(float64)
+	case int:
+		min = float64(arr[0].(int))
 	default:
-		return 0, fmt.Errorf("invalid node: %v", node)
-	}
-}
-
-func evaluateNumber(node *NumberNode) (float64, error) {
-	switch node.Type {
-	case IntLiteral:
-		v, err := strconv.ParseFloat(node.Lit, 64)
-		if err != nil {
-			return 0, err
-		}
-		return v, nil
-	}
-	return 0, fmt.Errorf("invalid type: %v", node.Type)
-}
-
-func get(name string, data map[string]float64) (float64, error) {
-	value, exists := data[name]
-	if !exists {
-		return 0, fmt.Errorf("%s not found", name)
+		return false
 	}
 
-	return value, nil
-}
-
-func evalBinary(node *BinaryNode, data map[string]float64) (float64, error) {
-	left, err := eval(node.Left, data)
-	if err != nil {
-		return 0, err
-	}
-	right, err := eval(node.Right, data)
-	if err != nil {
-		return 0, err
+	switch arr[1].(type) {
+	case float64:
+		max = arr[1].(float64)
+	case int:
+		max = float64(arr[1].(int))
+	default:
+		return false
 	}
 
-	switch node.Type {
-	case AND:
-		return and(left, right), nil
-	case OR:
-		return or(left, right), nil
-	case Plus:
-		return add(left, right), nil
-	case Minus:
-		return minus(left, right), nil
-	case Star:
-		return star(left, right), nil
-	case Slash:
-		return slash(left, right)
-	case GT:
-		return gt(left, right), nil
-	case GE:
-		return ge(left, right), nil
-	case LT:
-		return lt(left, right), nil
-	case LE:
-		return le(left, right), nil
-	case EQ:
-		return eq(left, right), nil
-	case NE:
-		return ne(left, right), nil
-	}
-	return 0, fmt.Errorf("invalid operator: %v", node.Type)
-}
-
-// and
-func and(left, right float64) float64 {
-	if left > 0.0 && right > 0.0 {
-		return 1
-	}
-	return 0
-}
-
-// or
-func or(left, right float64) float64 {
-	if left > 0.0 || right > 0.0 {
-		return 1
-	}
-	return 0
-}
-
-func gt(left, right float64) float64 {
-	if left > right {
-		return 1
-	}
-	return 0
-}
-
-func ge(left, right float64) float64 {
-	if left >= right {
-		return 1
-	}
-	return 0
-}
-
-func lt(left, right float64) float64 {
-	if left < right {
-		return 1
-	}
-	return 0
-}
-
-func le(left, right float64) float64 {
-	if left <= right {
-		return 1
-	}
-	return 0
-}
-
-func eq(left, right float64) float64 {
-	if left == right {
-		return 1
-	}
-	return 0
-}
-
-func ne(left, right float64) float64 {
-	if left != right {
-		return 1
-	}
-	return 0
-}
-
-func add(left, right float64) float64 {
-	return left + right
-}
-
-func minus(left, right float64) float64 {
-	return left - right
-}
-
-func star(left, right float64) float64 {
-	return left * right
-}
-
-func slash(left, right float64) (float64, error) {
-	if right == 0 {
-		return 0, fmt.Errorf("right is zero")
-	}
-	res := left / right
-	return res, nil
+	return target >= min && target <= max
 }

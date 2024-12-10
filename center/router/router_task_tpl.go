@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/toolkits/pkg/ginx"
+	"github.com/toolkits/pkg/i18n"
 	"github.com/toolkits/pkg/str"
 )
 
@@ -34,14 +35,23 @@ func (rt *Router) taskTplGetsByGids(c *gin.Context) {
 	query := ginx.QueryStr(c, "query", "")
 	limit := ginx.QueryInt(c, "limit", 20)
 
-	gids := str.IdsInt64(ginx.QueryStr(c, "gids"), ",")
-	if len(gids) == 0 {
-		ginx.NewRender(c, http.StatusBadRequest).Message("arg(gids) is empty")
-		return
-	}
+	gids := str.IdsInt64(ginx.QueryStr(c, "gids", ""), ",")
+	if len(gids) > 0 {
+		for _, gid := range gids {
+			rt.bgroCheck(c, gid)
+		}
+	} else {
+		me := c.MustGet("user").(*models.User)
+		if !me.IsAdmin() {
+			var err error
+			gids, err = models.MyBusiGroupIds(rt.Ctx, me.Id)
+			ginx.Dangerous(err)
 
-	for _, gid := range gids {
-		rt.bgroCheck(c, gid)
+			if len(gids) == 0 {
+				ginx.NewRender(c).Data([]int{}, nil)
+				return
+			}
+		}
 	}
 
 	total, err := models.TaskTplTotal(rt.Ctx, gids, query)
@@ -87,6 +97,14 @@ func (rt *Router) taskTplGetByService(c *gin.Context) {
 	ginx.NewRender(c).Data(tpl, err)
 }
 
+func (rt *Router) taskTplGetsByService(c *gin.Context) {
+	ginx.NewRender(c).Data(models.TaskTplGetAll(rt.Ctx))
+}
+
+func (rt *Router) taskTplStatistics(c *gin.Context) {
+	ginx.NewRender(c).Data(models.TaskTplStatistics(rt.Ctx))
+}
+
 type taskTplForm struct {
 	Title     string   `json:"title" binding:"required"`
 	Batch     int      `json:"batch"`
@@ -101,6 +119,11 @@ type taskTplForm struct {
 }
 
 func (rt *Router) taskTplAdd(c *gin.Context) {
+	if !rt.Ibex.Enable {
+		ginx.Bomb(400, i18n.Sprintf(c.GetHeader("X-Language"), "This functionality has not been enabled. Please contact the system administrator to activate it."))
+		return
+	}
+
 	var f taskTplForm
 	ginx.BindJSON(c, &f)
 
@@ -170,6 +193,13 @@ func (rt *Router) taskTplDel(c *gin.Context) {
 
 	if tpl == nil {
 		ginx.NewRender(c).Message(nil)
+		return
+	}
+
+	ids, err := models.GetAlertRuleIdsByTaskId(rt.Ctx, tid)
+	ginx.Dangerous(err)
+	if len(ids) > 0 {
+		ginx.NewRender(c).Message("can't del this task tpl, used by alert rule ids(%v) ", ids)
 		return
 	}
 

@@ -32,6 +32,7 @@ type Alerting struct {
 	Timeout           int64
 	TemplatesDir      string
 	NotifyConcurrency int
+	WebhookBatchSend  bool
 }
 
 type CallPlugin struct {
@@ -46,13 +47,6 @@ type RedisPub struct {
 	ChannelKey    string
 }
 
-type Ibex struct {
-	Address       string
-	BasicAuthUser string
-	BasicAuthPass string
-	Timeout       int64
-}
-
 func (a *Alert) PreCheck(configDir string) {
 	if a.Alerting.TemplatesDir == "" {
 		a.Alerting.TemplatesDir = path.Join(configDir, "template")
@@ -64,10 +58,6 @@ func (a *Alert) PreCheck(configDir string) {
 
 	if a.Heartbeat.Interval == 0 {
 		a.Heartbeat.Interval = 1000
-	}
-
-	if a.Heartbeat.EngineName == "" {
-		a.Heartbeat.EngineName = "default"
 	}
 
 	if a.EngineDelay == 0 {

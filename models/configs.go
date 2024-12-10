@@ -39,16 +39,33 @@ var (
 	ConfigEncrypted = 1 //ciphertext
 )
 
-func (c *Configs) DB2FE() error {
-	return nil
-}
-
 const (
 	SALT            = "salt"
 	RSA_PRIVATE_KEY = "rsa_private_key"
 	RSA_PUBLIC_KEY  = "rsa_public_key"
 	RSA_PASSWORD    = "rsa_password"
+	JWT_SIGNING_KEY = "jwt_signing_key"
 )
+
+func InitJWTSigningKey(ctx *ctx.Context) string {
+	val, err := ConfigsGet(ctx, JWT_SIGNING_KEY)
+	if err != nil {
+		log.Fatalln("init jwt signing key in mysql", err)
+	}
+
+	if val != "" {
+		return val
+	}
+
+	content := fmt.Sprintf("%s%d%d%s", runner.Hostname, os.Getpid(), time.Now().UnixNano(), str.RandLetters(6))
+	key := str.MD5(content)
+	err = ConfigsSet(ctx, JWT_SIGNING_KEY, key)
+	if err != nil {
+		log.Fatalln("init jwt signing key in mysql", err)
+	}
+
+	return key
+}
 
 // InitSalt generate random salt
 func InitSalt(ctx *ctx.Context) {
@@ -89,10 +106,8 @@ func InitRSAPassWord(ctx *ctx.Context) (string, error) {
 
 func ConfigsGet(ctx *ctx.Context, ckey string) (string, error) { //select built-in type configs
 	if !ctx.IsCenter {
-		if !ctx.IsCenter {
-			s, err := poster.GetByUrls[string](ctx, "/v1/n9e/config?key="+ckey)
-			return s, err
-		}
+		s, err := poster.GetByUrls[string](ctx, "/v1/n9e/config?key="+ckey)
+		return s, err
 	}
 
 	var lst []string
@@ -106,6 +121,22 @@ func ConfigsGet(ctx *ctx.Context, ckey string) (string, error) { //select built-
 	}
 
 	return "", nil
+}
+
+func ConfigsGetAll(ctx *ctx.Context) ([]*Configs, error) { // select built-in type configs
+	if !ctx.IsCenter {
+		lst, err := poster.GetByUrls[[]*Configs](ctx, "/v1/n9e/all-configs")
+		return lst, err
+	}
+
+	var lst []*Configs
+	err := DB(ctx).Model(&Configs{}).Select("ckey, cval").
+		Where("ckey!='' and external=? ", 0).Find(&lst).Error
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to query configs")
+	}
+
+	return lst, nil
 }
 
 func ConfigsSet(ctx *ctx.Context, ckey, cval string) error {
@@ -139,7 +170,22 @@ func ConfigsSetWithUname(ctx *ctx.Context, ckey, cval, uName string) error { //b
 	return err
 }
 
+func ConfigsGetFlashDutyAppKey(ctx *ctx.Context) (string, error) {
+	configs, err := ConfigsSelectByCkey(ctx, "flashduty_app_key")
+	if err != nil {
+		return "", err
+	}
+	if len(configs) == 0 || configs[0].Cval == "" {
+		return "", errors.New("flashduty_app_key is empty")
+	}
+	return configs[0].Cval, nil
+}
+
 func ConfigsSelectByCkey(ctx *ctx.Context, ckey string) ([]Configs, error) {
+	if !ctx.IsCenter {
+		return []Configs{}, nil
+	}
+
 	var objs []Configs
 	err := DB(ctx).Where("ckey=?", ckey).Find(&objs).Error
 	if err != nil {
@@ -322,4 +368,20 @@ func ConfigUserVariableGetDecryptMap(context *ctx.Context, privateKey []byte, pa
 	}
 
 	return ret, nil
+}
+
+func ConfigCvalStatistics(context *ctx.Context) (*Statistics, error) {
+	if !context.IsCenter {
+		return poster.GetByUrls[*Statistics](context, "/v1/n9e/statistic?name=cval")
+	}
+
+	session := DB(context).Model(&Configs{}).Select("count(*) as total",
+		"max(update_at) as last_updated").Where("ckey!='' and external=? ", 0) // built-in config
+
+	var stats []*Statistics
+	err := session.Find(&stats).Error
+	if err != nil {
+		return nil, err
+	}
+	return stats[0], nil
 }

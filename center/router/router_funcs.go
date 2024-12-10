@@ -1,17 +1,14 @@
 package router
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/ccfos/nightingale/v6/alert/aconf"
 	"github.com/ccfos/nightingale/v6/models"
 	"github.com/ccfos/nightingale/v6/pkg/ctx"
-	"github.com/ccfos/nightingale/v6/pkg/ibex"
-	"github.com/gin-gonic/gin"
 
+	"github.com/gin-gonic/gin"
 	"github.com/toolkits/pkg/ginx"
 )
 
@@ -48,6 +45,10 @@ func (rt *Router) statistic(c *gin.Context) {
 		statistics, err = models.ConfigsUserVariableStatistics(rt.Ctx)
 		ginx.NewRender(c).Data(statistics, err)
 		return
+	case "cval":
+		statistics, err = models.ConfigCvalStatistics(rt.Ctx)
+		ginx.NewRender(c).Data(statistics, err)
+		return
 	default:
 		ginx.Bomb(http.StatusBadRequest, "invalid name")
 	}
@@ -68,8 +69,26 @@ func queryDatasourceIds(c *gin.Context) []int64 {
 	return ids
 }
 
+func queryStrListField(c *gin.Context, fieldName string, sep ...string) []string {
+	str := ginx.QueryStr(c, fieldName, "")
+	if str == "" {
+		return nil
+	}
+
+	lst := []string{str}
+	for _, s := range sep {
+		var newLst []string
+		for _, str := range lst {
+			newLst = append(newLst, strings.Split(str, s)...)
+		}
+		lst = newLst
+	}
+	return lst
+}
+
 type idsForm struct {
-	Ids []int64 `json:"ids"`
+	Ids               []int64 `json:"ids"`
+	IsSyncToFlashDuty bool    `json:"is_sync_to_flashduty"`
 }
 
 func (f idsForm) Verify() {
@@ -132,31 +151,6 @@ type DoneIdsReply struct {
 type TaskCreateReply struct {
 	Err string `json:"err"`
 	Dat int64  `json:"dat"` // task.id
-}
-
-// return task.id, error
-func TaskCreate(v interface{}, ibexc aconf.Ibex) (int64, error) {
-	var res TaskCreateReply
-	err := ibex.New(
-		ibexc.Address,
-		ibexc.BasicAuthUser,
-		ibexc.BasicAuthPass,
-		ibexc.Timeout,
-	).
-		Path("/ibex/v1/tasks").
-		In(v).
-		Out(&res).
-		POST()
-
-	if err != nil {
-		return 0, err
-	}
-
-	if res.Err != "" {
-		return 0, fmt.Errorf("response.err: %v", res.Err)
-	}
-
-	return res.Dat, nil
 }
 
 func Username(c *gin.Context) string {

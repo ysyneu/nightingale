@@ -28,6 +28,14 @@ func LoadOpsYaml(configDir string, opsYamlFile string) error {
 	if !file.IsExist(fp) {
 		return nil
 	}
+
+	hash, _ := file.MD5(fp)
+	if hash == "2f91a9ed265cf2024e266dc1d538ee77" {
+		// ops.yaml 是老的默认文件，删除
+		file.Remove(fp)
+		return nil
+	}
+
 	return file.ReadYaml(fp, &Operations)
 }
 
@@ -68,7 +76,9 @@ ops:
     - "/dashboards/add"
     - "/dashboards/put"
     - "/dashboards/del"
-    - "/dashboards-built-in"
+    - "/embedded-dashboards/put"
+    - "/embedded-dashboards"
+    - "/public-dashboards"
 
 - name: alert
   cname: 告警规则
@@ -77,7 +87,7 @@ ops:
     - "/alert-rules/add"
     - "/alert-rules/put"
     - "/alert-rules/del"
-    - "/alert-rules-built-in"
+
 - name: alert-mutes
   cname: 告警静默管理
   ops:
@@ -163,6 +173,22 @@ ops:
   - "/busi-groups/add"
   - "/busi-groups/put"
   - "/busi-groups/del"
+
+- name: builtin-metrics
+  cname: 指标视图
+  ops:
+    - "/metrics-built-in"
+    - "/builtin-metrics/add"
+    - "/builtin-metrics/put"
+    - "/builtin-metrics/del"
+
+- name: built-in-components
+  cname: 模版中心
+  ops:
+    - "/built-in-components"
+    - "/built-in-components/add"
+    - "/built-in-components/put"
+    - "/built-in-components/del"
 
 - name: system
   cname: 系统信息

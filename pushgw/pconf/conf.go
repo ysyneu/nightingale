@@ -13,6 +13,7 @@ type Pushgw struct {
 	BusiGroupLabelKey   string
 	IdentMetrics        []string
 	IdentStatsThreshold int
+	IdentDropThreshold  int
 	WriteConcurrency    int
 	LabelRewrite        bool
 	ForceUseServerTS    bool
@@ -51,14 +52,16 @@ type WriterOptions struct {
 }
 
 type RelabelConfig struct {
-	SourceLabels  model.LabelNames
-	Separator     string
-	Regex         string
+	SourceLabels  model.LabelNames `json:"source_labels"`
+	Separator     string           `json:"separator"`
+	Regex         string           `json:"regex"`
 	RegexCompiled *regexp.Regexp
-	Modulus       uint64
-	TargetLabel   string
-	Replacement   string
-	Action        string
+	If            string `json:"if"`
+	IfRegex       *regexp.Regexp
+	Modulus       uint64 `json:"modulus"`
+	TargetLabel   string `json:"target_label"`
+	Replacement   string `json:"replacement"`
+	Action        string `json:"action"`
 }
 
 func (p *Pushgw) PreCheck() {
@@ -79,7 +82,11 @@ func (p *Pushgw) PreCheck() {
 	}
 
 	if p.IdentStatsThreshold <= 0 {
-		p.IdentStatsThreshold = 400
+		p.IdentStatsThreshold = 1500
+	}
+
+	if p.IdentDropThreshold <= 0 {
+		p.IdentDropThreshold = 5000000
 	}
 
 	for _, writer := range p.Writers {

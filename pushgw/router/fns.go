@@ -20,6 +20,12 @@ func (rt *Router) AppendLabels(pt *prompb.TimeSeries, target *models.Target, bgC
 
 	for key, value := range target.TagsMap {
 		if index, has := labelKeys[key]; has {
+			// e.g. busigroup=cloud
+			if _, has := labelKeys[rt.Pushgw.BusiGroupLabelKey]; has {
+				// busigroup key already exists, skip
+				continue
+			}
+
 			// overwrite labels
 			if rt.Pushgw.LabelRewrite {
 				pt.Labels[index].Value = value
@@ -73,6 +79,10 @@ func (rt *Router) AppendLabels(pt *prompb.TimeSeries, target *models.Target, bgC
 // }
 
 func (rt *Router) debugSample(remoteAddr string, v *prompb.TimeSeries) {
+	if v == nil {
+		return
+	}
+
 	filter := rt.Pushgw.DebugSample
 	if len(filter) == 0 {
 		return
@@ -97,7 +107,7 @@ func (rt *Router) debugSample(remoteAddr string, v *prompb.TimeSeries) {
 	logger.Debugf("--> debug sample from: %s, sample: %s", remoteAddr, v.String())
 }
 
-func (rt *Router) DropSample(remoteAddr string, v *prompb.TimeSeries) bool {
+func (rt *Router) DropSample(v *prompb.TimeSeries) bool {
 	filters := rt.Pushgw.DropSample
 	if len(filters) == 0 {
 		return false
@@ -136,14 +146,20 @@ func matchSample(filterMap, sampleMap map[string]string) bool {
 }
 
 func (rt *Router) ForwardByIdent(clientIP string, ident string, v *prompb.TimeSeries) {
-	rt.BeforePush(clientIP, v)
+	v = rt.BeforePush(clientIP, v)
 	if v == nil {
 		return
 	}
 
-	IdentStatsInc(ident)
-	if rt.DropSample(clientIP, v) {
-		CounterDropSampleTotal.WithLabelValues(clientIP).Inc()
+	IdentStats.Increment(ident, 1)
+	if rt.DropSample(v) {
+		CounterDropSampleTotal.WithLabelValues(ident).Inc()
+		return
+	}
+
+	count := IdentStats.Get(ident)
+	if count > rt.Pushgw.IdentDropThreshold {
+		CounterDropSampleTotal.WithLabelValues(ident).Inc()
 		return
 	}
 
@@ -151,14 +167,15 @@ func (rt *Router) ForwardByIdent(clientIP string, ident string, v *prompb.TimeSe
 }
 
 func (rt *Router) ForwardByMetric(clientIP string, metric string, v *prompb.TimeSeries) {
-	rt.BeforePush(clientIP, v)
+	v = rt.BeforePush(clientIP, v)
+	rt.debugSample(clientIP, v)
 	if v == nil {
 		return
 	}
 
-	IdentStatsInc(metric)
-	if rt.DropSample(clientIP, v) {
-		CounterDropSampleTotal.WithLabelValues(clientIP).Inc()
+	IdentStats.Increment(metric, 1)
+	if rt.DropSample(v) {
+		CounterDropSampleTotal.WithLabelValues(metric).Inc()
 		return
 	}
 
@@ -171,7 +188,7 @@ func (rt *Router) ForwardByMetric(clientIP string, metric string, v *prompb.Time
 	rt.Writers.PushSample(hashkey, *v)
 }
 
-func (rt *Router) BeforePush(clientIP string, v *prompb.TimeSeries) {
-	rt.HandleTS(v)
+func (rt *Router) BeforePush(clientIP string, v *prompb.TimeSeries) *prompb.TimeSeries {
 	rt.debugSample(clientIP, v)
+	return rt.HandleTS(v)
 }

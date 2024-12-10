@@ -3,6 +3,7 @@ package record
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ccfos/nightingale/v6/alert/aconf"
@@ -25,9 +26,11 @@ type Scheduler struct {
 	writers     *writer.WritersType
 
 	stats *astats.Stats
+
+	datasourceCache *memsto.DatasourceCacheType
 }
 
-func NewScheduler(aconf aconf.Alert, rrc *memsto.RecordingRuleCacheType, promClients *prom.PromClientMap, writers *writer.WritersType, stats *astats.Stats) *Scheduler {
+func NewScheduler(aconf aconf.Alert, rrc *memsto.RecordingRuleCacheType, promClients *prom.PromClientMap, writers *writer.WritersType, stats *astats.Stats, datasourceCache *memsto.DatasourceCacheType) *Scheduler {
 	scheduler := &Scheduler{
 		aconf:       aconf,
 		recordRules: make(map[string]*RecordRuleContext),
@@ -38,6 +41,8 @@ func NewScheduler(aconf aconf.Alert, rrc *memsto.RecordingRuleCacheType, promCli
 		writers:     writers,
 
 		stats: stats,
+
+		datasourceCache: datasourceCache,
 	}
 
 	go scheduler.LoopSyncRules(context.Background())
@@ -66,9 +71,9 @@ func (s *Scheduler) syncRecordRules() {
 			continue
 		}
 
-		datasourceIds := s.promClients.Hit(rule.DatasourceIdsJson)
+		datasourceIds := s.datasourceCache.GetIDsByDsCateAndQueries("prometheus", rule.DatasourceQueries)
 		for _, dsId := range datasourceIds {
-			if !naming.DatasourceHashRing.IsHit(dsId, fmt.Sprintf("%d", rule.Id), s.aconf.Heartbeat.Endpoint) {
+			if !naming.DatasourceHashRing.IsHit(strconv.FormatInt(dsId, 10), fmt.Sprintf("%d", rule.Id), s.aconf.Heartbeat.Endpoint) {
 				continue
 			}
 

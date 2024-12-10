@@ -22,14 +22,23 @@ func (rt *Router) alertMuteGetsByBG(c *gin.Context) {
 }
 
 func (rt *Router) alertMuteGetsByGids(c *gin.Context) {
-	gids := str.IdsInt64(ginx.QueryStr(c, "gids"), ",")
-	if len(gids) == 0 {
-		ginx.NewRender(c, http.StatusBadRequest).Message("arg(gids) is empty")
-		return
-	}
+	gids := str.IdsInt64(ginx.QueryStr(c, "gids", ""), ",")
+	if len(gids) > 0 {
+		for _, gid := range gids {
+			rt.bgroCheck(c, gid)
+		}
+	} else {
+		me := c.MustGet("user").(*models.User)
+		if !me.IsAdmin() {
+			var err error
+			gids, err = models.MyBusiGroupIds(rt.Ctx, me.Id)
+			ginx.Dangerous(err)
 
-	for _, gid := range gids {
-		rt.bgroCheck(c, gid)
+			if len(gids) == 0 {
+				ginx.NewRender(c).Data([]int{}, nil)
+				return
+			}
+		}
 	}
 
 	lst, err := models.AlertMuteGetsByBGIds(rt.Ctx, gids)
@@ -41,7 +50,8 @@ func (rt *Router) alertMuteGets(c *gin.Context) {
 	prods := strings.Fields(ginx.QueryStr(c, "prods", ""))
 	bgid := ginx.QueryInt64(c, "bgid", -1)
 	query := ginx.QueryStr(c, "query", "")
-	lst, err := models.AlertMuteGets(rt.Ctx, prods, bgid, query)
+	disabled := ginx.QueryInt(c, "disabled", -1)
+	lst, err := models.AlertMuteGets(rt.Ctx, prods, bgid, disabled, query)
 
 	ginx.NewRender(c).Data(lst, err)
 }
@@ -86,7 +96,8 @@ func (rt *Router) alertMuteAddByService(c *gin.Context) {
 	var f models.AlertMute
 	ginx.BindJSON(c, &f)
 
-	ginx.NewRender(c).Message(f.Add(rt.Ctx))
+	err := f.Add(rt.Ctx)
+	ginx.NewRender(c).Data(f.Id, err)
 }
 
 func (rt *Router) alertMuteDel(c *gin.Context) {
@@ -95,6 +106,14 @@ func (rt *Router) alertMuteDel(c *gin.Context) {
 	f.Verify()
 
 	ginx.NewRender(c).Message(models.AlertMuteDel(rt.Ctx, f.Ids))
+}
+
+// alertMuteGet returns the alert mute by ID
+func (rt *Router) alertMuteGet(c *gin.Context) {
+	amid := ginx.UrlParamInt64(c, "amid")
+	am, err := models.AlertMuteGetById(rt.Ctx, amid)
+	am.DB2FE()
+	ginx.NewRender(c).Data(am, err)
 }
 
 func (rt *Router) alertMutePutByFE(c *gin.Context) {
